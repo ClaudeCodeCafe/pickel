@@ -67,14 +67,28 @@ def _sanitize(text: str) -> str:
 
 
 def _safe_int(val: object) -> int:
-    """Coerce *val* to int, returning 0 (with warning) on failure."""
+    """Coerce *val* to int, returning 0 (with warning) on failure.
+
+    * ``bool`` is rejected (bool is a subclass of int).
+    * Negative values are clamped to 0.
+    """
+    if isinstance(val, bool):
+        _warn(f"expected int, got bool: {val!r}")
+        return 0
     if isinstance(val, int):
+        if val < 0:
+            _warn(f"negative int clamped to 0: {val!r}")
+            return 0
         return val
     if isinstance(val, float):
         if not math.isfinite(val):
             _warn(f"non-finite float coerced to 0: {val!r}")
             return 0
-        return int(val)
+        n = int(val)
+        if n < 0:
+            _warn(f"negative float clamped to 0: {val!r}")
+            return 0
+        return n
     _warn(f"expected int, got {type(val).__name__}: {val!r}")
     return 0
 
@@ -169,7 +183,14 @@ def find_projects(base: Path) -> dict[str, Path]:
                 # Try to extract org from github-com-{org}-{repo}
                 m = re.search(r"-github-com-([^-]+)-", dirname)
                 suffix = m.group(1) if m else dirname[:16]
-                projects[f"{name} ({suffix})"] = path
+                display = f"{name} ({suffix})"
+                # Ensure uniqueness: append counter if display name already taken
+                if display in projects:
+                    counter = 2
+                    while f"{display} ({counter})" in projects:
+                        counter += 1
+                    display = f"{display} ({counter})"
+                projects[display] = path
 
     return projects
 
