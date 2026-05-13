@@ -1,19 +1,28 @@
-# ⛏️ pickel
+# pickel
 
 A pickaxe for mining Claude Code conversation logs.
 
-One command to search all your Claude Code conversations.
+A zero-dependency Python CLI that searches through your
+`~/.claude/projects/` conversation history and returns results instantly.
 
 ## Install
 
+### pip / pipx
+
 ```bash
-# Homebrew
+pipx install pickel-cli    # recommended (isolated env)
+pip install pickel-cli      # or with pip
+```
+
+### Homebrew
+
+```bash
 brew install ClaudeCodeCafe/tap/pickel
+```
 
-# pip
-pip install pickel-cli
+### Manual
 
-# or just download
+```bash
 curl -fsSL https://raw.githubusercontent.com/ClaudeCodeCafe/pickel/master/pickel -o /usr/local/bin/pickel
 chmod +x /usr/local/bin/pickel
 ```
@@ -21,46 +30,55 @@ chmod +x /usr/local/bin/pickel
 ## Usage
 
 ```bash
-# Search across all conversations
-pickel search "auth middleware"
-
-# Filter by project
-pickel search "migration" -p my-app
-
-# List all projects
-pickel projects
-
-# Last session summary
-pickel last my-app
-
-# Session context
-pickel context a1b2c3d4
+pickel search "retry logic"
 ```
 
-## Commands
-
-### `pickel search <query>`
-
-Full-text search across all conversation logs.
-
 ```
-$ pickel search "retry logic"
-
 ⛏️  3 results for retry logic
 
   my-app a1b2c3d4
     2026-05-10 14:32 🧑 Add retry logic to the API client
     2026-05-10 14:33 🤖 Added exponential backoff with max 3 retries...
+    2026-05-10 14:35 🧑 Make the max retries configurable
 ```
 
-Options:
-- `-p, --project` — Filter by project name
-- `-m, --max` — Max results (default: 10)
-- `--json` — JSON output
+### Commands
 
-### `pickel projects`
+| Command | Description |
+| ------- | ----------- |
+| `search <query>` | Full-text search across all conversations |
+| `projects` | List all projects with session counts and sizes |
+| `last <project>` | Show the last session summary for a project |
+| `context <session>` | Extract context from a specific session |
 
-List all projects with session counts and sizes.
+### Search Options
+
+| Flag | Description |
+| ---- | ----------- |
+| `-p, --project` | Filter by project name |
+| `-m, --max` | Max results (default: 10) |
+| `--json` | Output as JSON |
+
+### Examples
+
+```bash
+# Search all projects
+pickel search "auth middleware"
+
+# Search within a specific project
+pickel search "migration" -p my-app
+
+# List projects
+pickel projects
+
+# What did I last work on?
+pickel last my-app
+
+# Resume a session
+pickel context a1b2c3d4
+```
+
+### Project List
 
 ```
 $ pickel projects
@@ -77,9 +95,7 @@ $ pickel projects
   58 sessions · 240 MB total
 ```
 
-### `pickel last <project>`
-
-Show the last session summary for a project.
+### Last Session
 
 ```
 $ pickel last my-app
@@ -96,49 +112,17 @@ $ pickel last my-app
     🤖 Added 4 test cases covering timeout, network error...
 ```
 
-### `pickel context <session-id>`
-
-Extract context from a specific session. Useful for resuming work.
-
-```
-$ pickel context a1b2c3d4
-
-⛏️  my-app a1b2c3d4-e5f6
-
-  User messages (23 total):
-      1. Add retry logic to the API client
-      2. Make it configurable
-      3. Add tests
-      ...
-
-  Tools used: Bash, Edit, Read, Write
-```
-
 ## How It Works
 
-Claude Code stores every conversation as JSONL files in `~/.claude/projects/`. Each line is a JSON object — user messages, assistant responses, tool calls, system events.
+Claude Code stores conversations as JSONL files in `~/.claude/projects/`.
+pickel streams through these files line by line and matches your query.
+Same principle as grep — fast, no memory bloat.
 
-pickel reads these files line by line (streaming, no memory bloat) and searches through them. That's it. A thin wrapper over `json.loads()` and string matching.
+## Requirements
 
-```
-~/.claude/projects/
-├── my-app/
-│   ├── a1b2c3d4.jsonl      ← conversation log
-│   ├── e5f6g7h8.jsonl
-│   └── memory/MEMORY.md
-├── api-server/
-│   └── ...
-└── ...
-```
+- Python 3.8+
 
-## Design
-
-- **Zero dependencies** — Python 3.8+, stdlib only
-- **Single file** — one Python script
-- **Streaming** — reads line by line, never loads full files into memory
-- **Fast** — same principle as grep
-- **NO_COLOR** — respects `NO_COLOR` and `FORCE_COLOR` env vars
-- **Pipe-friendly** — `--json` flag on every command
+No external packages required. Uses only the Python standard library.
 
 ## License
 
