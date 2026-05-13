@@ -300,19 +300,17 @@ fi
 echo "[35] malformed JSONL does not crash"
 MALFORMED_DIR=$(mktemp -d)
 trap 'rm -rf "$MALFORMED_DIR"' EXIT
-MALFORMED_PROJ="$FIXTURES/projects/test-malformed"
+MALFORMED_PROJ="$MALFORMED_DIR/projects/test-malformed"
 mkdir -p "$MALFORMED_PROJ"
 printf '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}\n' > "$MALFORMED_PROJ/bad.jsonl"
 printf 'THIS IS NOT JSON\n' >> "$MALFORMED_PROJ/bad.jsonl"
 printf '["array","not","object"]\n' >> "$MALFORMED_PROJ/bad.jsonl"
 printf '"just a string"\n' >> "$MALFORMED_PROJ/bad.jsonl"
 printf '{"type":"assistant","timestamp":"2025-01-01T00:00:05Z","message":{"role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50}}}\n' >> "$MALFORMED_PROJ/bad.jsonl"
-# Should warn but not crash
-OUT=$("${PICKEL_CMD[@]}" search "hello" 2>&1) || true
+# Should warn but not crash (point CLAUDE_CONFIG_DIR at mktemp so malformed project is visible)
+OUT=$(CLAUDE_CONFIG_DIR="$MALFORMED_DIR" "${PICKEL_CMD[@]}" search "hello" 2>&1) || true
 echo "$OUT" | grep -q "invalid JSON\|expected object\|hello"
 echo "  OK"
-# Cleanup
-rm -rf "$MALFORMED_PROJ"
 
 echo ""
 echo "=== All smoke tests passed ==="

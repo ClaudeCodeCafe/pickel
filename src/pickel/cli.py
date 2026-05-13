@@ -526,7 +526,11 @@ def cmd_last(args):
         sys.exit(1)
 
     latest = sessions[0]
-    mtime = latest.stat().st_mtime
+    try:
+        mtime = latest.stat().st_mtime
+    except OSError:
+        print(f"Session vanished: {latest}", file=sys.stderr)
+        sys.exit(1)
     age = time.time() - mtime
     age_str = (
         f"{int(age / 3600)}h ago"
