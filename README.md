@@ -11,7 +11,7 @@ One command to search all your Claude Code conversations.
 brew install ClaudeCodeCafe/tap/pickel
 
 # pip
-pip install pickel
+pip install pickel-cli
 
 # or just download
 curl -fsSL https://raw.githubusercontent.com/ClaudeCodeCafe/pickel/master/pickel -o /usr/local/bin/pickel
@@ -22,19 +22,19 @@ chmod +x /usr/local/bin/pickel
 
 ```bash
 # Search across all conversations
-pickel search "cscan"
+pickel search "auth middleware"
 
 # Filter by project
-pickel search "VHS" -p garage
+pickel search "migration" -p my-app
 
 # List all projects
 pickel projects
 
 # Last session summary
-pickel last garage
+pickel last my-app
 
 # Session context
-pickel context c20437aa
+pickel context a1b2c3d4
 ```
 
 ## Commands
@@ -44,13 +44,13 @@ pickel context c20437aa
 Full-text search across all conversation logs.
 
 ```
-$ pickel search "cscan"
+$ pickel search "retry logic"
 
-⛏️  10 results for cscan
+⛏️  3 results for retry logic
 
-  garage c20437aa
-    2026-05-13 17:02 🧑 cscan めっちゃいいじゃん！
-    2026-05-13 17:02 🤖 cscan — Claude の設定をスキャンして可視化する...
+  my-app a1b2c3d4
+    2026-05-10 14:32 🧑 Add retry logic to the API client
+    2026-05-10 14:33 🤖 Added exponential backoff with max 3 retries...
 ```
 
 Options:
@@ -65,16 +65,16 @@ List all projects with session counts and sizes.
 ```
 $ pickel projects
 
-⛏️  42 projects
+⛏️  12 projects
 
   PROJECT                     SESSIONS     SIZE   LAST
   ─────────────────────────── ──────── ──────── ──────
-  garage                            15  326.9M     0m
-  claude-code-cafe                  52  579.0M     2d
-  antenna                           42   11.0M     8d
+  my-app                            24  120.5M     1h
+  api-server                        18   85.2M     3d
+  docs-site                          7   12.0M     5d
   ...
 
-  2,809 sessions · 5.9 GB total
+  58 sessions · 240 MB total
 ```
 
 ### `pickel last <project>`
@@ -82,18 +82,18 @@ $ pickel projects
 Show the last session summary for a project.
 
 ```
-$ pickel last garage
+$ pickel last my-app
 
-⛏️  garage — last session (2h ago)
+⛏️  my-app — last session (1h ago)
 
-  session  c20437aa-e14
-  model    claude-opus-4-6
-  turns    48
-  tokens   125,000
+  session  a1b2c3d4-e5f6
+  model    claude-sonnet-4-5
+  turns    23
+  tokens   45,200
 
   Last exchange:
-    🧑 pickel search "cscan"
-    🤖 Found 10 results...
+    🧑 Can you add tests for the retry logic?
+    🤖 Added 4 test cases covering timeout, network error...
 ```
 
 ### `pickel context <session-id>`
@@ -101,17 +101,17 @@ $ pickel last garage
 Extract context from a specific session. Useful for resuming work.
 
 ```
-$ pickel context c20437aa
+$ pickel context a1b2c3d4
 
-⛏️  garage c20437aa-e14
+⛏️  my-app a1b2c3d4-e5f6
 
-  User messages (48 total):
-      1. CSS のクリーンアップしよう
-      2. コンポーネントギャラリー欲しい
-      3. アニメーション入れたい
+  User messages (23 total):
+      1. Add retry logic to the API client
+      2. Make it configurable
+      3. Add tests
       ...
 
-  Tools used: Bash, Edit, Read, Write, Agent
+  Tools used: Bash, Edit, Read, Write
 ```
 
 ## How It Works
@@ -121,32 +121,24 @@ Claude Code stores every conversation as JSONL files in `~/.claude/projects/`. E
 pickel reads these files line by line (streaming, no memory bloat) and searches through them. That's it. A thin wrapper over `json.loads()` and string matching.
 
 ```
-~/.claude/projects/          pickel searches here
-├── garage/                  ⛏️ 15 sessions, 326MB
-│   ├── abc123.jsonl         ← conversation log
-│   ├── def456.jsonl
+~/.claude/projects/
+├── my-app/
+│   ├── a1b2c3d4.jsonl      ← conversation log
+│   ├── e5f6g7h8.jsonl
 │   └── memory/MEMORY.md
-├── antenna/                 ⛏️ 42 sessions, 11MB
+├── api-server/
 │   └── ...
-└── ...                      42 projects, 5.9GB total
+└── ...
 ```
 
 ## Design
 
 - **Zero dependencies** — Python 3.8+, stdlib only
-- **Single file** — `pickel` is one 450-line Python script
+- **Single file** — one Python script
 - **Streaming** — reads line by line, never loads full files into memory
-- **Fast** — searches 6GB in seconds (same principle as grep)
+- **Fast** — same principle as grep
 - **NO_COLOR** — respects `NO_COLOR` and `FORCE_COLOR` env vars
 - **Pipe-friendly** — `--json` flag on every command
-
-## Part of the CCC Toolchain
-
-| Tool | Language | What it does |
-|------|----------|-------------|
-| [vshot](https://github.com/ClaudeCodeCafe/vshot) | bash | Video → montage for AI |
-| [cping](https://github.com/ClaudeCodeCafe/cping) | Python | Ping Claude's service status |
-| **pickel** | Python | Mine conversation logs |
 
 ## License
 
