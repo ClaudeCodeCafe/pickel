@@ -7,20 +7,38 @@ A zero-dependency Python CLI that searches through your
 
 ## Install
 
-### pip / pipx
+### Option A: Claude Code Plugin (Recommended)
+
+```bash
+/plugin marketplace add ClaudeCodeCafe/pickel
+/plugin install pickel@pickel
+```
+
+Then use directly:
+
+```
+/pickel:search "auth middleware"
+/pickel:last my-app
+/pickel:cost --today
+/pickel:setup
+```
+
+### Option B: CLI
+
+#### pip / pipx
 
 ```bash
 pipx install pickel-cli    # recommended (isolated env)
 pip install pickel-cli      # or with pip
 ```
 
-### Homebrew
+#### Homebrew
 
 ```bash
 brew install ClaudeCodeCafe/tap/pickel
 ```
 
-### Manual
+#### Manual
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ClaudeCodeCafe/pickel/master/pickel -o /usr/local/bin/pickel
