@@ -22,7 +22,7 @@ echo "=== pickel smoke tests ==="
 # ── Basic ────────────────────────────────────────────────────────
 
 echo "[1] --version"
-"${PICKEL_CMD[@]}" --version | grep -q "0.3.1"
+"${PICKEL_CMD[@]}" --version | grep -q "0.3.2"
 echo "  OK"
 
 echo "[2] --help"
@@ -256,20 +256,63 @@ else
   echo "  OK"
 fi
 
+# ── chat session -p PROJECT ─────────────────────────────────────
+
+echo "[31] chat session1 -p test-project --json"
+JSON=$("${PICKEL_CMD[@]}" chat session1 -p test-project --json)
+"$PYTHON" -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+assert isinstance(data, list), 'expected list'
+assert len(data) > 0, 'expected at least one conversation'
+assert data[0]['project'] == 'test-project', f'wrong project: {data[0][\"project\"]}'
+" <<< "$JSON"
+echo "  OK"
+
+# ── Non-existent project for errors/tools/cost ─────────────────
+
+echo "[32] errors -p non-existent project exits 1"
+if "${PICKEL_CMD[@]}" errors -p "nonexistent-xyz" 2>/dev/null; then
+  echo "  FAIL (should have exited non-zero)"
+  exit 1
+else
+  echo "  OK"
+fi
+
+echo "[33] tools -p non-existent project exits 1"
+if "${PICKEL_CMD[@]}" tools -p "nonexistent-xyz" 2>/dev/null; then
+  echo "  FAIL (should have exited non-zero)"
+  exit 1
+else
+  echo "  OK"
+fi
+
+echo "[34] cost -p non-existent project exits 1"
+if "${PICKEL_CMD[@]}" cost -p "nonexistent-xyz" 2>/dev/null; then
+  echo "  FAIL (should have exited non-zero)"
+  exit 1
+else
+  echo "  OK"
+fi
+
 # ── Malformed JSONL ─────────────────────────────────────────────
 
-echo "[31] malformed JSONL does not crash"
-MALFORMED_DIR="$FIXTURES/projects/test-malformed"
-mkdir -p "$MALFORMED_DIR"
-printf '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}\n' > "$MALFORMED_DIR/bad.jsonl"
-printf 'THIS IS NOT JSON\n' >> "$MALFORMED_DIR/bad.jsonl"
-printf '{"type":"assistant","timestamp":"2025-01-01T00:00:05Z","message":{"role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50}}}\n' >> "$MALFORMED_DIR/bad.jsonl"
+echo "[35] malformed JSONL does not crash"
+MALFORMED_DIR=$(mktemp -d)
+trap 'rm -rf "$MALFORMED_DIR"' EXIT
+MALFORMED_PROJ="$FIXTURES/projects/test-malformed"
+mkdir -p "$MALFORMED_PROJ"
+printf '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}\n' > "$MALFORMED_PROJ/bad.jsonl"
+printf 'THIS IS NOT JSON\n' >> "$MALFORMED_PROJ/bad.jsonl"
+printf '["array","not","object"]\n' >> "$MALFORMED_PROJ/bad.jsonl"
+printf '"just a string"\n' >> "$MALFORMED_PROJ/bad.jsonl"
+printf '{"type":"assistant","timestamp":"2025-01-01T00:00:05Z","message":{"role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50}}}\n' >> "$MALFORMED_PROJ/bad.jsonl"
 # Should warn but not crash
 OUT=$("${PICKEL_CMD[@]}" search "hello" 2>&1) || true
-echo "$OUT" | grep -q "invalid JSON" || echo "$OUT" | grep -q "hello"
+echo "$OUT" | grep -q "invalid JSON\|expected object\|hello"
 echo "  OK"
 # Cleanup
-rm -rf "$MALFORMED_DIR"
+rm -rf "$MALFORMED_PROJ"
 
 echo ""
 echo "=== All smoke tests passed ==="

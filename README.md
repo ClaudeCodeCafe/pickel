@@ -143,6 +143,21 @@ $ pickel last my-app
     A Added 4 test cases covering timeout, network error...
 ```
 
+## Security / Privacy
+
+Claude Code conversation logs may contain sensitive information such as API
+keys, passwords, internal URLs, or proprietary code snippets that were pasted
+into the chat. Keep the following in mind:
+
+- **`--json` output includes raw message text.** Avoid piping it to public
+  logs or shared dashboards without redaction.
+- **`~/.claude/projects/` is not encrypted.** Anyone with read access to your
+  home directory can read your conversation history.
+- **`search` and `chat` surface verbatim content.** Be cautious when sharing
+  terminal output or screenshots.
+
+pickel itself never sends data over the network. All processing is local.
+
 ## How It Works
 
 Claude Code stores conversations as JSONL files in `~/.claude/projects/`.

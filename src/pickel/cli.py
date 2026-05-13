@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 # ── Color ────────────────────────────────────────────────────────
 
@@ -167,15 +167,15 @@ def find_projects(base: Path) -> dict[str, Path]:
 def find_sessions(project_dir: Path) -> list[Path]:
     """Return all .jsonl session files sorted by mtime desc."""
     files = list(project_dir.glob("*.jsonl"))
-    safe_files = []
+    timed: list[tuple[float, Path]] = []
     for f in files:
         try:
-            f.stat()
-            safe_files.append(f)
+            mtime = f.stat().st_mtime
+            timed.append((mtime, f))
         except OSError as e:
             _warn(f"cannot stat {f}: {e}")
-    safe_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-    return safe_files
+    timed.sort(key=lambda t: t[0], reverse=True)
+    return [f for _, f in timed]
 
 
 def _session_mtime_date(session_path: Path) -> str | None:
@@ -231,10 +231,17 @@ def iter_messages(jsonl_path: Path) -> Iterator[dict]:
                 if not line:
                     continue
                 try:
-                    yield json.loads(line)
+                    entry = json.loads(line)
                 except json.JSONDecodeError:
                     _warn(f"{jsonl_path.name}:{lineno}: invalid JSON, skipping")
                     continue
+                if not isinstance(entry, dict):
+                    _warn(
+                        f"{jsonl_path.name}:{lineno}: expected object, "
+                        f"got {type(entry).__name__}, skipping"
+                    )
+                    continue
+                yield entry
     except (OSError, IOError) as e:
         _warn(f"cannot read {jsonl_path}: {e}")
         return
@@ -459,6 +466,8 @@ def cmd_context(args):
 
         if etype == "assistant":
             msg = entry.get("message", {})
+            if not isinstance(msg, dict):
+                continue
             content = msg.get("content", [])
             if isinstance(content, list):
                 for block in content:
@@ -544,6 +553,8 @@ def cmd_last(args):
 
         if etype == "assistant":
             msg = entry.get("message", {})
+            if not isinstance(msg, dict):
+                continue
             m = msg.get("model", "")
             if isinstance(m, str) and m and not m.startswith("<"):
                 model = m
@@ -595,15 +606,18 @@ def cmd_projects(args):
     rows = []
     for name, pdir in projects.items():
         sessions = list(pdir.glob("*.jsonl"))
-        safe_sessions = []
+        total_size = 0
+        last_mod = 0
+        session_count = 0
         for f in sessions:
             try:
-                f.stat()
-                safe_sessions.append(f)
+                st = f.stat()
             except OSError:
-                pass
-        total_size = sum(f.stat().st_size for f in safe_sessions)
-        last_mod = max((f.stat().st_mtime for f in safe_sessions), default=0)
+                continue
+            session_count += 1
+            total_size += st.st_size
+            if st.st_mtime > last_mod:
+                last_mod = st.st_mtime
         age = time.time() - last_mod if last_mod else 0
         age_str = (
             (
@@ -616,7 +630,7 @@ def cmd_projects(args):
             if last_mod
             else "?"
         )
-        rows.append((name, len(safe_sessions), total_size, age_str))
+        rows.append((name, session_count, total_size, age_str))
 
     rows.sort(key=lambda r: r[2], reverse=True)
 
@@ -666,6 +680,8 @@ def cmd_chat(args):
         # Find all matching sessions
         matches = []
         for pname, pdir in projects.items():
+            if args.project and args.project.lower() not in pname.lower():
+                continue
             for sf in find_sessions(pdir):
                 if args.session in sf.stem:
                     matches.append((pname, sf))
@@ -686,6 +702,14 @@ def cmd_chat(args):
         ]
         if not matches:
             print(f"Project {bold(args.project)} not found", file=sys.stderr)
+            sys.exit(1)
+        if len(matches) > 1:
+            print(
+                f"Multiple projects match '{args.project}':",
+                file=sys.stderr,
+            )
+            for name, _ in matches:
+                print(f"  {name}", file=sys.stderr)
             sys.exit(1)
         proj_name, proj_dir = matches[0]
         sessions = find_sessions(proj_dir)
@@ -780,6 +804,12 @@ def cmd_errors(args):
         target_projects = [
             (k, v) for k, v in projects.items() if project_filter.lower() in k.lower()
         ]
+        if not target_projects:
+            print(
+                f"pickel: no projects matching '{project_filter}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # Patterns for user correction messages
     correction_patterns = [
@@ -889,6 +919,12 @@ def cmd_tools(args):
         target_projects = [
             (k, v) for k, v in projects.items() if project_filter.lower() in k.lower()
         ]
+        if not target_projects:
+            print(
+                f"pickel: no projects matching '{project_filter}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     tool_counts: dict[str, int] = defaultdict(int)
 
@@ -905,6 +941,8 @@ def cmd_tools(args):
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "tool_use":
                             name = block.get("name", "unknown")
+                            if not isinstance(name, str):
+                                name = "unknown"
                             tool_counts[name] += 1
 
     sorted_tools = sorted(tool_counts.items(), key=lambda x: x[1], reverse=True)
@@ -954,6 +992,12 @@ def cmd_cost(args):
         target_projects = [
             (k, v) for k, v in projects.items() if project_filter.lower() in k.lower()
         ]
+        if not target_projects:
+            print(
+                f"pickel: no projects matching '{project_filter}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # Cost rates per 1M tokens (USD)
     cost_rates = {
