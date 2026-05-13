@@ -472,7 +472,10 @@ def cmd_context(args):
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
-                        tools_used.add(block.get("name", "?"))
+                        name = block.get("name", "unknown")
+                        if not isinstance(name, str):
+                            name = "unknown"
+                        tools_used.add(name)
 
     if args.json:
         print(
