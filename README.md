@@ -2,7 +2,7 @@
 
 A pickaxe for mining Claude Code conversation logs.
 
-6GB of conversation history. One command to find anything.
+One command to search all your Claude Code conversations.
 
 ## Install
 
