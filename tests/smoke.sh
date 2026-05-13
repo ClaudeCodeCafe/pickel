@@ -308,7 +308,12 @@ printf '["array","not","object"]\n' >> "$MALFORMED_PROJ/bad.jsonl"
 printf '"just a string"\n' >> "$MALFORMED_PROJ/bad.jsonl"
 printf '{"type":"assistant","timestamp":"2025-01-01T00:00:05Z","message":{"role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50}}}\n' >> "$MALFORMED_PROJ/bad.jsonl"
 # Should warn but not crash (point CLAUDE_CONFIG_DIR at mktemp so malformed project is visible)
-OUT=$(CLAUDE_CONFIG_DIR="$MALFORMED_DIR" "${PICKEL_CMD[@]}" search "hello" 2>&1) || true
+EXIT_CODE=0
+OUT=$(CLAUDE_CONFIG_DIR="$MALFORMED_DIR" "${PICKEL_CMD[@]}" search "hello" 2>&1) || EXIT_CODE=$?
+if [ "$EXIT_CODE" -ne 0 ]; then
+  echo "  FAIL: expected exit 0, got $EXIT_CODE"
+  exit 1
+fi
 echo "$OUT" | grep -q "invalid JSON\|expected object\|hello"
 echo "  OK"
 
