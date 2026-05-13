@@ -50,7 +50,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build twine
+        run: pip install "build>=1.0" "twine>=5.0"
 
       - name: Build package
         run: python -m build
@@ -62,10 +62,10 @@ jobs:
         run: pip install dist/*.whl
 
       - name: Verify installed pickel --version
-        run: pickel --version | grep -q "pickel 0.3.0"
+        run: pickel --version | grep -q "pickel 0.3.1"
 
       - name: Run smoke tests against installed package
-        run: bash tests/smoke.sh
+        run: PICKEL=pickel bash tests/smoke.sh
 
       - name: Install from sdist
         run: |
@@ -73,7 +73,10 @@ jobs:
           pip install dist/*.tar.gz
 
       - name: Verify sdist install
-        run: pickel --version | grep -q "pickel 0.3.0"
+        run: pickel --version | grep -q "pickel 0.3.1"
+
+      - name: Run smoke tests against sdist install
+        run: PICKEL=pickel bash tests/smoke.sh
 
   lint:
     runs-on: ubuntu-latest
@@ -86,7 +89,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install ruff
-        run: pip install ruff
+        run: pip install "ruff>=0.4"
 
       - name: Lint with ruff
         run: ruff check pickel src/

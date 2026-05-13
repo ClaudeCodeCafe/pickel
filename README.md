@@ -34,13 +34,13 @@ pickel search "retry logic"
 ```
 
 ```
-⛏️  3 results for retry logic
+3 results for retry logic
 
   my-app
     a1b2c3d4
-      2026-05-10 14:32 🧑 Add retry logic to the API client
-      2026-05-10 14:33 🤖 Added exponential backoff with max 3 retries...
-      2026-05-10 14:35 🧑 Make the max retries configurable
+      2026-05-10 14:32 U Add retry logic to the API client
+      2026-05-10 14:33 A Added exponential backoff with max 3 retries...
+      2026-05-10 14:35 U Make the max retries configurable
 ```
 
 ### Commands
@@ -51,7 +51,7 @@ pickel search "retry logic"
 | `projects` | List all projects with session counts and sizes |
 | `last <project>` | Show the last session summary for a project |
 | `context <session>` | Show session context (user messages + tools) |
-| `chat` | Show session conversation in chat format |
+| `chat [-p PROJECT \| SESSION]` | Show session conversation in chat format |
 | `errors` | Extract user corrections and API errors |
 | `tools` | Show tool usage frequency |
 | `cost` | Estimate token costs by model |
@@ -63,17 +63,20 @@ pickel search "retry logic"
 | `-p, --project` | Filter by project name |
 | `-m, --max` | Max results (default: 10) |
 | `-r, --regex` | Use regex search |
-| `--since YYYY-MM-DD` | Filter sessions since date |
-| `--today` | Only today's sessions |
+| `--since YYYY-MM-DD` | Filter sessions since date (by file modification time) |
+| `--today` | Only today's sessions (by file modification time) |
 | `--compact` | Compact output (for AI tools) |
-| `--json` | Output as JSON |
+| `--json` | JSON output |
 
 ### Global Options
 
 | Flag | Description |
 | ---- | ----------- |
 | `-q, --quiet` | Suppress warnings on stderr |
-| `--json` | JSON output (available on all commands) |
+
+### Per-Command Options
+
+`--json` is available on all subcommands (`search`, `projects`, `last`, `context`, `chat`, `errors`, `tools`, `cost`).
 
 ### Examples
 
@@ -111,7 +114,7 @@ pickel cost --month
 ```
 $ pickel projects
 
-⛏️  12 projects
+  12 projects
 
   PROJECT                     SESSIONS     SIZE   LAST
   ─────────────────────────── ──────── ──────── ──────
@@ -128,7 +131,7 @@ $ pickel projects
 ```
 $ pickel last my-app
 
-⛏️  my-app — last session (1h ago)
+  my-app — last session (1h ago)
 
   session  a1b2c3d4-e5f6
   model    claude-sonnet-4-5
@@ -136,8 +139,8 @@ $ pickel last my-app
   tokens   45,200
 
   Last exchange:
-    🧑 Can you add tests for the retry logic?
-    🤖 Added 4 test cases covering timeout, network error...
+    U Can you add tests for the retry logic?
+    A Added 4 test cases covering timeout, network error...
 ```
 
 ## How It Works
@@ -151,6 +154,19 @@ Same principle as grep — fast, no memory bloat.
 - Python 3.8+
 
 No external packages required. Uses only the Python standard library.
+
+## Contributing
+
+```bash
+git clone https://github.com/ClaudeCodeCafe/pickel.git
+cd pickel
+pip install ruff
+bash tests/smoke.sh          # run tests
+ruff check pickel src/        # lint
+ruff format --check pickel src/  # format check
+```
+
+PRs welcome. Please ensure `smoke.sh` passes and `ruff` reports no errors.
 
 ## License
 

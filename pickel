@@ -12,8 +12,9 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # ── Color ────────────────────────────────────────────────────────
 
@@ -48,28 +49,31 @@ def red(t: str) -> str:
     return c("31", t)
 
 
-def green(t: str) -> str:
-    return c("32", t)
-
-
-def yellow(t: str) -> str:
-    return c("33", t)
-
-
-def blue(t: str) -> str:
-    return c("34", t)
-
-
-def magenta(t: str) -> str:
-    return c("35", t)
-
-
-def cyan(t: str) -> str:
-    return c("36", t)
-
-
 def orange(t: str) -> str:
     return c("38;5;208", t)
+
+
+# ── Sanitization ────────────────────────────────────────────────
+
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _sanitize(text: str) -> str:
+    """Remove C0 control characters and ANSI escape sequences from text."""
+    return _CONTROL_RE.sub("", text)
+
+
+# ── Safe helpers ────────────────────────────────────────────────
+
+
+def _safe_int(val: object) -> int:
+    """Coerce *val* to int, returning 0 (with warning) on failure."""
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float):
+        return int(val)
+    _warn(f"expected int, got {type(val).__name__}: {val!r}")
+    return 0
 
 
 # ── Data Dir ─────────────────────────────────────────────────────
@@ -137,7 +141,12 @@ def find_projects(base: Path) -> dict[str, Path]:
 
     # First pass: collect name -> list of (dirname, path)
     name_to_dirs: dict[str, list[tuple[str, Path]]] = {}
-    for d in sorted(base.iterdir()):
+    try:
+        entries = sorted(base.iterdir())
+    except OSError as e:
+        _warn(f"cannot list {base}: {e}")
+        return projects
+    for d in entries:
         if d.is_dir() and not d.name.startswith(".") and d.name not in _EXCLUDED_DIRS:
             name = normalize_project_name(d.name)
             name_to_dirs.setdefault(name, []).append((d.name, d))
@@ -159,13 +168,24 @@ def find_projects(base: Path) -> dict[str, Path]:
 def find_sessions(project_dir: Path) -> list[Path]:
     """Return all .jsonl session files sorted by mtime desc."""
     files = list(project_dir.glob("*.jsonl"))
-    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-    return files
+    safe_files = []
+    for f in files:
+        try:
+            f.stat()
+            safe_files.append(f)
+        except OSError as e:
+            _warn(f"cannot stat {f}: {e}")
+    safe_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    return safe_files
 
 
-def _session_mtime_date(session_path: Path) -> str:
-    """Return YYYY-MM-DD from file mtime."""
-    return datetime.fromtimestamp(session_path.stat().st_mtime).strftime("%Y-%m-%d")
+def _session_mtime_date(session_path: Path) -> str | None:
+    """Return YYYY-MM-DD from file mtime, or None on error."""
+    try:
+        return datetime.fromtimestamp(session_path.stat().st_mtime).strftime("%Y-%m-%d")
+    except OSError as e:
+        _warn(f"cannot stat {session_path}: {e}")
+        return None
 
 
 def _today_str() -> str:
@@ -203,7 +223,7 @@ def _warn(msg: str) -> None:
 # ── JSONL Parser ─────────────────────────────────────────────────
 
 
-def iter_messages(jsonl_path: Path):
+def iter_messages(jsonl_path: Path) -> Iterator[dict]:
     """Yield parsed entries from a .jsonl session file."""
     try:
         with open(jsonl_path, "r", encoding="utf-8") as f:
@@ -234,7 +254,9 @@ def extract_text(entry: dict) -> str | None:
         for block in content:
             if isinstance(block, dict):
                 if block.get("type") == "text":
-                    parts.append(block.get("text", ""))
+                    val = block.get("text", "")
+                    if isinstance(val, str):
+                        parts.append(val)
                 elif block.get("type") == "tool_use":
                     parts.append(f"[tool:{block.get('name', '?')}]")
                 elif block.get("type") == "tool_result":
@@ -243,7 +265,9 @@ def extract_text(entry: dict) -> str | None:
                     if isinstance(sub, list):
                         for s in sub:
                             if isinstance(s, dict) and s.get("type") == "text":
-                                parts.append(s.get("text", "")[:200])
+                                val = s.get("text", "")
+                                if isinstance(val, str):
+                                    parts.append(val[:200])
                     elif isinstance(sub, str):
                         parts.append(sub[:200])
         return "\n".join(parts) if parts else None
@@ -298,13 +322,19 @@ def cmd_search(args):
         target_projects = [
             (k, v) for k, v in projects.items() if project_filter.lower() in k.lower()
         ]
+        if not target_projects:
+            print(
+                f"pickel: no projects matching '{project_filter}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     for proj_name, proj_dir in target_projects:
         for session_file in find_sessions(proj_dir):
             # Date filter: skip sessions older than since_date
             if since_date:
                 file_date = _session_mtime_date(session_file)
-                if file_date < since_date:
+                if file_date is None or file_date < since_date:
                     continue
 
             session_id = session_file.stem[:8]
@@ -346,16 +376,16 @@ def cmd_search(args):
     if compact:
         for r in results:
             print(
-                f"project:{r['project']} session:{r['session']} "
-                f"role:{r['role']} text:{r['line']}"
+                f"project:{_sanitize(r['project'])} session:{_sanitize(r['session'])} "
+                f"role:{_sanitize(r['role'])} text:{_sanitize(r['line'])}"
             )
         return
 
     if not results:
-        print(f"⛏️  No results for {bold(args.query)}")
+        print(f"No results for {bold(args.query)}")
         return
 
-    print(f"⛏️  {bold(str(len(results)))} results for {bold(args.query)}\n")
+    print(f"{bold(str(len(results)))} results for {bold(args.query)}\n")
 
     # Group by project -> session
     current_proj = None
@@ -364,16 +394,16 @@ def cmd_search(args):
         if r["project"] != current_proj:
             current_proj = r["project"]
             current_session = None
-            print(f"  {orange(current_proj)}")
+            print(f"  {orange(_sanitize(current_proj))}")
         if r["session"] != current_session:
             current_session = r["session"]
-            print(f"    {dim(current_session)}")
+            print(f"    {dim(_sanitize(current_session))}")
 
-        icon = "🧑" if r["role"] == "user" else "🤖"
+        icon = "U" if r["role"] == "user" else "A"
         ts = r["timestamp"][:16].replace("T", " ") if r["timestamp"] else ""
 
         # Highlight the query in the line
-        line = r["line"]
+        line = _sanitize(r["line"])
         if USE_COLOR:
             if use_regex:
                 try:
@@ -393,23 +423,29 @@ def cmd_context(args):
     base = get_projects_dir()
     projects = find_projects(base)
 
-    # Find the session
-    target = None
-    proj_name = None
+    # Find all matching sessions
+    matches = []
     for pname, pdir in projects.items():
         if args.project and args.project.lower() not in pname.lower():
             continue
         for sf in find_sessions(pdir):
             if args.session in sf.stem:
-                target = sf
-                proj_name = pname
-                break
-        if target:
-            break
+                matches.append((pname, sf))
 
-    if not target:
-        print(f"⛏️  Session {bold(args.session)} not found", file=sys.stderr)
+    if not matches:
+        print(f"Session {bold(args.session)} not found", file=sys.stderr)
         sys.exit(1)
+
+    if len(matches) > 1:
+        print(
+            f"Multiple sessions match '{args.session}':",
+            file=sys.stderr,
+        )
+        for pname, sf in matches:
+            print(f"  {pname} {sf.stem}", file=sys.stderr)
+        sys.exit(1)
+
+    proj_name, target = matches[0][0], matches[0][1]
 
     # Collect user messages and key assistant responses
     user_msgs = []
@@ -445,11 +481,11 @@ def cmd_context(args):
         )
         return
 
-    print(f"⛏️  {orange(proj_name)} {dim(target.stem[:12])}\n")
+    print(f"  {orange(_sanitize(proj_name))} {dim(_sanitize(target.stem[:12]))}\n")
     print(f"  {bold('User messages')} ({len(user_msgs)} total):")
     for i, msg in enumerate(user_msgs[:15]):
         first_line = msg.split("\n")[0][:100]
-        print(f"    {dim(str(i + 1) + '.'):>5} {first_line}")
+        print(f"    {dim(str(i + 1) + '.'):>5} {_sanitize(first_line)}")
     if len(user_msgs) > 15:
         print(f"    {dim(f'  ...+{len(user_msgs) - 15} more')}")
     print(f"\n  {bold('Tools used')}: {', '.join(sorted(tools_used)) or 'none'}")
@@ -463,13 +499,22 @@ def cmd_last(args):
 
     matches = [(k, v) for k, v in projects.items() if args.project.lower() in k.lower()]
     if not matches:
-        print(f"⛏️  Project {bold(args.project)} not found", file=sys.stderr)
+        print(f"Project {bold(args.project)} not found", file=sys.stderr)
+        sys.exit(1)
+
+    if len(matches) > 1:
+        print(
+            f"Multiple projects match '{args.project}':",
+            file=sys.stderr,
+        )
+        for name, _ in matches:
+            print(f"  {name}", file=sys.stderr)
         sys.exit(1)
 
     proj_name, proj_dir = matches[0]
     sessions = find_sessions(proj_dir)
     if not sessions:
-        print(f"⛏️  No sessions in {bold(proj_name)}", file=sys.stderr)
+        print(f"No sessions in {bold(proj_name)}", file=sys.stderr)
         sys.exit(1)
 
     latest = sessions[0]
@@ -501,12 +546,12 @@ def cmd_last(args):
         if etype == "assistant":
             msg = entry.get("message", {})
             m = msg.get("model", "")
-            if m and not m.startswith("<"):
+            if isinstance(m, str) and m and not m.startswith("<"):
                 model = m
             usage = msg.get("usage") or {}
             if isinstance(usage, dict):
-                total_tokens += usage.get("input_tokens", 0) + usage.get(
-                    "output_tokens", 0
+                total_tokens += _safe_int(usage.get("input_tokens", 0)) + _safe_int(
+                    usage.get("output_tokens", 0)
                 )
             if text:
                 last_assistant = text.strip().split("\n")[0][:100]
@@ -530,15 +575,15 @@ def cmd_last(args):
         )
         return
 
-    print(f"⛏️  {orange(proj_name)} — last session ({age_str})\n")
-    print(f"  {dim('session')}  {latest.stem[:12]}")
-    print(f"  {dim('model')}    {model}")
+    print(f"  {orange(_sanitize(proj_name))} — last session ({age_str})\n")
+    print(f"  {dim('session')}  {_sanitize(latest.stem[:12])}")
+    print(f"  {dim('model')}    {_sanitize(model)}")
     print(f"  {dim('turns')}    {len(user_msgs)}")
     print(f"  {dim('tokens')}   {total_tokens:,}")
     print()
     print(f"  {bold('Last exchange')}:")
-    print(f"    🧑 {last_user}")
-    print(f"    🤖 {last_assistant}")
+    print(f"    U {_sanitize(last_user)}")
+    print(f"    A {_sanitize(last_assistant)}")
     print()
 
 
@@ -546,12 +591,20 @@ def cmd_projects(args):
     """List all projects with stats."""
     base = get_projects_dir()
     projects = find_projects(base)
+    limit = getattr(args, "limit", None)
 
     rows = []
     for name, pdir in projects.items():
         sessions = list(pdir.glob("*.jsonl"))
-        total_size = sum(f.stat().st_size for f in sessions)
-        last_mod = max((f.stat().st_mtime for f in sessions), default=0)
+        safe_sessions = []
+        for f in sessions:
+            try:
+                f.stat()
+                safe_sessions.append(f)
+            except OSError:
+                pass
+        total_size = sum(f.stat().st_size for f in safe_sessions)
+        last_mod = max((f.stat().st_mtime for f in safe_sessions), default=0)
         age = time.time() - last_mod if last_mod else 0
         age_str = (
             (
@@ -564,7 +617,7 @@ def cmd_projects(args):
             if last_mod
             else "?"
         )
-        rows.append((name, len(sessions), total_size, age_str))
+        rows.append((name, len(safe_sessions), total_size, age_str))
 
     rows.sort(key=lambda r: r[2], reverse=True)
 
@@ -585,14 +638,18 @@ def cmd_projects(args):
         )
         return
 
-    print(f"⛏️  {bold(str(len(rows)))} projects\n")
+    display_limit = limit if limit else len(rows)
+    print(f"  {bold(str(len(rows)))} projects\n")
     print(
         f"  {bold('PROJECT'):<30} {bold('SESSIONS'):>8} {bold('SIZE'):>8} {bold('LAST'):>6}"
     )
     print(f"  {'─' * 30} {'─' * 8} {'─' * 8} {'─' * 6}")
-    for name, count, size, age in rows[:20]:
+    for name, count, size, age in rows[:display_limit]:
         size_str = f"{size / 1024 / 1024:.1f}M"
-        print(f"  {name:<30} {count:>8} {size_str:>8} {dim(age):>6}")
+        print(f"  {_sanitize(name):<30} {count:>8} {size_str:>8} {dim(age):>6}")
+    remaining = len(rows) - display_limit
+    if remaining > 0:
+        print(f"  {dim(f'...+{remaining} more')}")
     print(
         f"\n  {dim(f'{sum(r[1] for r in rows)} sessions · {sum(r[2] for r in rows) / 1024 / 1024 / 1024:.1f} GB total')}"
     )
@@ -607,20 +664,29 @@ def cmd_chat(args):
     session_files = []
 
     if args.session:
-        # Find by session ID
+        # Find all matching sessions
+        matches = []
         for pname, pdir in projects.items():
             for sf in find_sessions(pdir):
                 if args.session in sf.stem:
-                    session_files.append((pname, sf))
-                    break
-            if session_files:
-                break
+                    matches.append((pname, sf))
+
+        if len(matches) > 1:
+            print(
+                f"Multiple sessions match '{args.session}':",
+                file=sys.stderr,
+            )
+            for pname, sf in matches:
+                print(f"  {pname} {sf.stem}", file=sys.stderr)
+            sys.exit(1)
+
+        session_files = matches
     elif args.project:
         matches = [
             (k, v) for k, v in projects.items() if args.project.lower() in k.lower()
         ]
         if not matches:
-            print(f"⛏️  Project {bold(args.project)} not found", file=sys.stderr)
+            print(f"Project {bold(args.project)} not found", file=sys.stderr)
             sys.exit(1)
         proj_name, proj_dir = matches[0]
         sessions = find_sessions(proj_dir)
@@ -628,11 +694,11 @@ def cmd_chat(args):
         for sf in sessions[:n]:
             session_files.append((proj_name, sf))
     else:
-        print("⛏️  Specify -p PROJECT or a session ID", file=sys.stderr)
+        print("Specify -p PROJECT or a session ID", file=sys.stderr)
         sys.exit(1)
 
     if not session_files:
-        print("⛏️  No sessions found", file=sys.stderr)
+        print("No sessions found", file=sys.stderr)
         sys.exit(1)
 
     all_conversations = []
@@ -657,7 +723,9 @@ def cmd_chat(args):
                 for block in content:
                     if isinstance(block, dict):
                         if block.get("type") == "text":
-                            parts.append(block.get("text", ""))
+                            val = block.get("text", "")
+                            if isinstance(val, str):
+                                parts.append(val)
                         elif block.get("type") == "tool_use":
                             parts.append(f"[tool:{block.get('name', '?')}]")
                         elif block.get("type") == "tool_result":
@@ -688,13 +756,16 @@ def cmd_chat(args):
         return
 
     for conv in all_conversations:
-        print(f"⛏️  {orange(conv['project'])} {dim(conv['session'][:12])}\n")
+        print(
+            f"  {orange(_sanitize(conv['project']))} "
+            f"{dim(_sanitize(conv['session'][:12]))}\n"
+        )
         for m in conv["messages"]:
-            icon = "🧑" if m["role"] == "user" else "🤖"
+            icon = "U" if m["role"] == "user" else "A"
             ts = m["timestamp"][:16].replace("T", " ") if m["timestamp"] else ""
             print(f"  {dim(ts)} {icon}")
             for line in m["text"].split("\n"):
-                print(f"    {line}")
+                print(f"    {_sanitize(line)}")
             print()
         print(f"  {dim('─' * 40)}\n")
 
@@ -775,20 +846,21 @@ def cmd_errors(args):
         return
 
     if not results:
-        print("⛏️  No errors or corrections found")
+        print("No errors or corrections found")
         return
 
     corrections = [r for r in results if r["type"] == "correction"]
     api_errors = [r for r in results if r["type"] == "api_error"]
 
-    print(f"⛏️  {bold(str(len(results)))} issues found\n")
+    print(f"  {bold(str(len(results)))} issues found\n")
 
     if corrections:
         print(f"  {bold('User corrections')} ({len(corrections)})")
         for r in corrections[:20]:
             ts = r["timestamp"][:16].replace("T", " ") if r["timestamp"] else ""
             print(
-                f"    {dim(ts)} {orange(r['project'])} {dim(r['session'])} {r['text']}"
+                f"    {dim(ts)} {orange(_sanitize(r['project']))} "
+                f"{dim(_sanitize(r['session']))} {_sanitize(r['text'])}"
             )
         if len(corrections) > 20:
             print(f"    {dim(f'  ...+{len(corrections) - 20} more')}")
@@ -799,7 +871,8 @@ def cmd_errors(args):
         for r in api_errors[:20]:
             ts = r["timestamp"][:16].replace("T", " ") if r["timestamp"] else ""
             print(
-                f"    {dim(ts)} {orange(r['project'])} {dim(r['session'])} {r['text']}"
+                f"    {dim(ts)} {orange(_sanitize(r['project']))} "
+                f"{dim(_sanitize(r['session']))} {_sanitize(r['text'])}"
             )
         if len(api_errors) > 20:
             print(f"    {dim(f'  ...+{len(api_errors) - 20} more')}")
@@ -848,16 +921,16 @@ def cmd_tools(args):
         return
 
     if not sorted_tools:
-        print("⛏️  No tool usage found")
+        print("No tool usage found")
         return
 
     total = sum(count for _, count in sorted_tools)
-    print(f"⛏️  Tool usage ({bold(str(total))} total calls)\n")
+    print(f"  Tool usage ({bold(str(total))} total calls)\n")
     print(f"  {bold('TOOL'):<40} {bold('COUNT'):>8} {bold('%'):>6}")
     print(f"  {'─' * 40} {'─' * 8} {'─' * 6}")
     for name, count in sorted_tools[:30]:
         pct = count / total * 100 if total else 0
-        print(f"  {name:<40} {count:>8} {dim(f'{pct:.1f}%'):>6}")
+        print(f"  {_sanitize(name):<40} {count:>8} {dim(f'{pct:.1f}%'):>6}")
     if len(sorted_tools) > 30:
         rest = sum(count for _, count in sorted_tools[30:])
         print(f"  {dim(f'...+{len(sorted_tools) - 30} more'):<40} {rest:>8}")
@@ -899,7 +972,7 @@ def cmd_cost(args):
         for session_file in find_sessions(proj_dir):
             if since_date:
                 file_date = _session_mtime_date(session_file)
-                if file_date < since_date:
+                if file_date is None or file_date < since_date:
                     continue
             for entry in iter_messages(session_file):
                 if entry.get("type") != "assistant":
@@ -908,12 +981,16 @@ def cmd_cost(args):
                 if not isinstance(msg, dict):
                     continue
                 model = msg.get("model", "unknown")
-                if not model or model.startswith("<"):
+                if not isinstance(model, str) or not model or model.startswith("<"):
                     model = "unknown"
                 usage = msg.get("usage") or {}
                 if isinstance(usage, dict):
-                    model_usage[model]["input_tokens"] += usage.get("input_tokens", 0)
-                    model_usage[model]["output_tokens"] += usage.get("output_tokens", 0)
+                    model_usage[model]["input_tokens"] += _safe_int(
+                        usage.get("input_tokens", 0)
+                    )
+                    model_usage[model]["output_tokens"] += _safe_int(
+                        usage.get("output_tokens", 0)
+                    )
 
     # Compute costs
     results = []
@@ -973,10 +1050,10 @@ def cmd_cost(args):
         return
 
     if not results:
-        print("⛏️  No usage data found")
+        print("No usage data found")
         return
 
-    print("⛏️  Token cost estimate\n")
+    print("  Token cost estimate\n")
     print(
         f"  {bold('MODEL'):<45} {bold('INPUT'):>12} {bold('OUTPUT'):>12} {bold('COST'):>10}"
     )
@@ -990,7 +1067,9 @@ def cmd_cost(args):
         else:
             cost_str = dim("n/a")
             uncosted.append(r["model"])
-        print(f"  {r['model']:<45} {inp_str:>12} {out_str:>12} {cost_str:>10}")
+        print(
+            f"  {_sanitize(r['model']):<45} {inp_str:>12} {out_str:>12} {cost_str:>10}"
+        )
     print(f"  {'─' * 45} {'─' * 12} {'─' * 12} {'─' * 10}")
     print(
         f"  {bold('TOTAL'):<45} {total_input:>12,} {total_output:>12,} "
@@ -1022,7 +1101,7 @@ def _positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pickel",
-        description="⛏️  A pickaxe for mining Claude Code conversation logs",
+        description="A pickaxe for mining Claude Code conversation logs",
     )
     p.add_argument("-V", "--version", action="version", version=f"pickel {__version__}")
     p.add_argument(
@@ -1043,8 +1122,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max results (default: 10)",
     )
     s.add_argument("-r", "--regex", action="store_true", help="Use regex search")
-    s.add_argument("--since", help="Filter sessions since date (YYYY-MM-DD)")
-    s.add_argument("--today", action="store_true", help="Only today's sessions")
+    s.add_argument(
+        "--since",
+        help="Filter sessions since date, YYYY-MM-DD (by file modification time)",
+    )
+    s.add_argument(
+        "--today",
+        action="store_true",
+        help="Only today's sessions (by file modification time)",
+    )
     s.add_argument(
         "--compact", action="store_true", help="Compact output (for AI tools)"
     )
@@ -1063,6 +1149,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # projects
     pj = sub.add_parser("projects", aliases=["p"], help="List all projects")
+    pj.add_argument(
+        "--limit",
+        type=_positive_int,
+        help="Max number of projects to display",
+    )
     pj.add_argument("--json", action="store_true", help="JSON output")
 
     # chat

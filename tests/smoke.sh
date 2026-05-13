@@ -7,7 +7,14 @@ ROOT="$(cd "$DIR/.." && pwd)"
 FIXTURES="$DIR/fixtures"
 
 PYTHON="${PYTHON:-python3}"
-PICKEL=("$PYTHON" "$ROOT/pickel")
+
+# Allow PICKEL env var to override the command (e.g. PICKEL=pickel for installed package)
+if [ -n "${PICKEL:-}" ]; then
+  PICKEL_CMD=("$PICKEL")
+else
+  PICKEL_CMD=("$PYTHON" "$ROOT/pickel")
+fi
+
 export CLAUDE_CONFIG_DIR="$FIXTURES"
 
 echo "=== pickel smoke tests ==="
@@ -15,22 +22,22 @@ echo "=== pickel smoke tests ==="
 # ── Basic ────────────────────────────────────────────────────────
 
 echo "[1] --version"
-"${PICKEL[@]}" --version | grep -q "0.3.0"
+"${PICKEL_CMD[@]}" --version | grep -q "0.3.1"
 echo "  OK"
 
 echo "[2] --help"
-"${PICKEL[@]}" --help >/dev/null
+"${PICKEL_CMD[@]}" --help >/dev/null
 echo "  OK"
 
 # ── Projects ─────────────────────────────────────────────────────
 
 echo "[3] projects"
-OUT=$("${PICKEL[@]}" projects)
+OUT=$("${PICKEL_CMD[@]}" projects)
 echo "$OUT" | grep -q "test-project"
 echo "  OK"
 
 echo "[4] projects --json (field check)"
-JSON=$("${PICKEL[@]}" projects --json)
+JSON=$("${PICKEL_CMD[@]}" projects --json)
 "$PYTHON" -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -48,12 +55,12 @@ echo "  OK"
 # ── Search ───────────────────────────────────────────────────────
 
 echo "[6] search"
-OUT=$("${PICKEL[@]}" search "smoke")
+OUT=$("${PICKEL_CMD[@]}" search "smoke")
 echo "$OUT" | grep -q "smoke"
 echo "  OK"
 
 echo "[7] search --json (field check)"
-JSON=$("${PICKEL[@]}" search "smoke" --json)
+JSON=$("${PICKEL_CMD[@]}" search "smoke" --json)
 "$PYTHON" -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -65,29 +72,29 @@ for item in data:
 echo "  OK"
 
 echo "[8] search -r (regex)"
-OUT=$("${PICKEL[@]}" search -r "auth|smoke" --max 5)
+OUT=$("${PICKEL_CMD[@]}" search -r "auth|smoke" --max 5)
 echo "$OUT" | grep -q "results"
 echo "  OK"
 
 echo "[9] search --compact"
-OUT=$("${PICKEL[@]}" search "smoke" --compact)
+OUT=$("${PICKEL_CMD[@]}" search "smoke" --compact)
 echo "$OUT" | grep -q "project:test-project"
 echo "  OK"
 
 echo "[10] search in hyphenated project"
-OUT=$("${PICKEL[@]}" search "deploy" -p my-cool-app)
+OUT=$("${PICKEL_CMD[@]}" search "deploy" -p my-cool-app)
 echo "$OUT" | grep -q "deploy"
 echo "  OK"
 
 # ── Chat ─────────────────────────────────────────────────────────
 
 echo "[11] chat -p test-project"
-OUT=$("${PICKEL[@]}" chat -p test-project)
+OUT=$("${PICKEL_CMD[@]}" chat -p test-project)
 echo "$OUT" | grep -q "test-project"
 echo "  OK"
 
 echo "[12] chat --json (field check)"
-JSON=$("${PICKEL[@]}" chat -p test-project --json)
+JSON=$("${PICKEL_CMD[@]}" chat -p test-project --json)
 "$PYTHON" -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -101,26 +108,60 @@ for conv in data:
 " <<< "$JSON"
 echo "  OK"
 
+# ── Context ─────────────────────────────────────────────────────
+
+echo "[13] context"
+OUT=$("${PICKEL_CMD[@]}" context session1 -p test-project)
+echo "$OUT" | grep -q "User messages"
+echo "  OK"
+
+echo "[14] context --json (field check)"
+JSON=$("${PICKEL_CMD[@]}" context session1 -p test-project --json)
+"$PYTHON" -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+for key in ('project', 'session', 'user_messages', 'tools_used'):
+    assert key in data, f'missing key: {key}'
+" <<< "$JSON"
+echo "  OK"
+
+# ── Last ────────────────────────────────────────────────────────
+
+echo "[15] last"
+OUT=$("${PICKEL_CMD[@]}" last test-project)
+echo "$OUT" | grep -q "test-project"
+echo "  OK"
+
+echo "[16] last --json (field check)"
+JSON=$("${PICKEL_CMD[@]}" last test-project --json)
+"$PYTHON" -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+for key in ('project', 'session', 'age', 'model', 'turns', 'tokens', 'last_user', 'last_assistant'):
+    assert key in data, f'missing key: {key}'
+" <<< "$JSON"
+echo "  OK"
+
 # ── Errors ───────────────────────────────────────────────────────
 
-echo "[13] errors"
-OUT=$("${PICKEL[@]}" errors)
+echo "[17] errors"
+OUT=$("${PICKEL_CMD[@]}" errors)
 echo "$OUT" | grep -q "issues"
 echo "  OK"
 
-echo "[14] errors --json"
-"${PICKEL[@]}" errors --json | "$PYTHON" -m json.tool >/dev/null
+echo "[18] errors --json"
+"${PICKEL_CMD[@]}" errors --json | "$PYTHON" -m json.tool >/dev/null
 echo "  OK"
 
 # ── Tools ────────────────────────────────────────────────────────
 
-echo "[15] tools"
-OUT=$("${PICKEL[@]}" tools)
+echo "[19] tools"
+OUT=$("${PICKEL_CMD[@]}" tools)
 echo "$OUT" | grep -q "Bash"
 echo "  OK"
 
-echo "[16] tools --json (field check)"
-JSON=$("${PICKEL[@]}" tools --json)
+echo "[20] tools --json (field check)"
+JSON=$("${PICKEL_CMD[@]}" tools --json)
 "$PYTHON" -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -133,13 +174,13 @@ echo "  OK"
 
 # ── Cost ─────────────────────────────────────────────────────────
 
-echo "[17] cost"
-OUT=$("${PICKEL[@]}" cost)
+echo "[21] cost"
+OUT=$("${PICKEL_CMD[@]}" cost)
 echo "$OUT" | grep -q "sonnet"
 echo "  OK"
 
-echo "[18] cost --json (field check)"
-JSON=$("${PICKEL[@]}" cost --json)
+echo "[22] cost --json (field check)"
+JSON=$("${PICKEL_CMD[@]}" cost --json)
 "$PYTHON" -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -155,57 +196,80 @@ echo "  OK"
 
 # ── Error paths (negative tests) ────────────────────────────────
 
-echo "[19] invalid regex exits with error"
-if "${PICKEL[@]}" search -r "[invalid" 2>/dev/null; then
+echo "[23] invalid regex exits with error"
+if "${PICKEL_CMD[@]}" search -r "[invalid" 2>/dev/null; then
   echo "  FAIL (should have exited non-zero)"
   exit 1
 else
   echo "  OK"
 fi
 
-echo "[20] non-existent project"
-if "${PICKEL[@]}" last "nonexistent-project-xyz" 2>/dev/null; then
+echo "[24] non-existent project"
+if "${PICKEL_CMD[@]}" last "nonexistent-project-xyz" 2>/dev/null; then
   echo "  FAIL (should have exited non-zero)"
   exit 1
 else
   echo "  OK"
 fi
 
-echo "[21] invalid --since date"
-if "${PICKEL[@]}" search "test" --since "not-a-date" 2>/dev/null; then
+echo "[25] invalid --since date"
+if "${PICKEL_CMD[@]}" search "test" --since "not-a-date" 2>/dev/null; then
   echo "  FAIL (should have exited non-zero)"
   exit 1
 else
   echo "  OK"
 fi
 
-echo "[22] --max 0 rejected"
-if "${PICKEL[@]}" search "test" --max 0 2>/dev/null; then
+echo "[26] --max 0 rejected"
+if "${PICKEL_CMD[@]}" search "test" --max 0 2>/dev/null; then
   echo "  FAIL (should have exited non-zero)"
   exit 1
 else
   echo "  OK"
 fi
 
-echo "[23] --max -1 rejected"
-if "${PICKEL[@]}" search "test" --max -1 2>/dev/null; then
+echo "[27] --max -1 rejected"
+if "${PICKEL_CMD[@]}" search "test" --max -1 2>/dev/null; then
   echo "  FAIL (should have exited non-zero)"
   exit 1
 else
   echo "  OK"
 fi
 
-echo "[24] chat --last 0 rejected"
-if "${PICKEL[@]}" chat -p test-project --last 0 2>/dev/null; then
+echo "[28] chat --last 0 rejected"
+if "${PICKEL_CMD[@]}" chat -p test-project --last 0 2>/dev/null; then
   echo "  FAIL (should have exited non-zero)"
   exit 1
 else
   echo "  OK"
 fi
 
-echo "[25] --quiet suppresses warnings"
-"${PICKEL[@]}" -q projects >/dev/null 2>&1
+echo "[29] --quiet suppresses warnings"
+"${PICKEL_CMD[@]}" -q projects >/dev/null 2>&1
 echo "  OK"
+
+echo "[30] search -p with non-existent project exits 1"
+if "${PICKEL_CMD[@]}" search "test" -p "nonexistent-xyz" 2>/dev/null; then
+  echo "  FAIL (should have exited non-zero)"
+  exit 1
+else
+  echo "  OK"
+fi
+
+# ── Malformed JSONL ─────────────────────────────────────────────
+
+echo "[31] malformed JSONL does not crash"
+MALFORMED_DIR="$FIXTURES/projects/test-malformed"
+mkdir -p "$MALFORMED_DIR"
+printf '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}\n' > "$MALFORMED_DIR/bad.jsonl"
+printf 'THIS IS NOT JSON\n' >> "$MALFORMED_DIR/bad.jsonl"
+printf '{"type":"assistant","timestamp":"2025-01-01T00:00:05Z","message":{"role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50}}}\n' >> "$MALFORMED_DIR/bad.jsonl"
+# Should warn but not crash
+OUT=$("${PICKEL_CMD[@]}" search "hello" 2>&1) || true
+echo "$OUT" | grep -q "invalid JSON" || echo "$OUT" | grep -q "hello"
+echo "  OK"
+# Cleanup
+rm -rf "$MALFORMED_DIR"
 
 echo ""
 echo "=== All smoke tests passed ==="
