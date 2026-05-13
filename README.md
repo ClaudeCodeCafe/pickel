@@ -36,10 +36,11 @@ pickel search "retry logic"
 ```
 ⛏️  3 results for retry logic
 
-  my-app a1b2c3d4
-    2026-05-10 14:32 🧑 Add retry logic to the API client
-    2026-05-10 14:33 🤖 Added exponential backoff with max 3 retries...
-    2026-05-10 14:35 🧑 Make the max retries configurable
+  my-app
+    a1b2c3d4
+      2026-05-10 14:32 🧑 Add retry logic to the API client
+      2026-05-10 14:33 🤖 Added exponential backoff with max 3 retries...
+      2026-05-10 14:35 🧑 Make the max retries configurable
 ```
 
 ### Commands
@@ -49,7 +50,11 @@ pickel search "retry logic"
 | `search <query>` | Full-text search across all conversations |
 | `projects` | List all projects with session counts and sizes |
 | `last <project>` | Show the last session summary for a project |
-| `context <session>` | Extract context from a specific session |
+| `context <session>` | Show session context (user messages + tools) |
+| `chat` | Show session conversation in chat format |
+| `errors` | Extract user corrections and API errors |
+| `tools` | Show tool usage frequency |
+| `cost` | Estimate token costs by model |
 
 ### Search Options
 
@@ -57,7 +62,18 @@ pickel search "retry logic"
 | ---- | ----------- |
 | `-p, --project` | Filter by project name |
 | `-m, --max` | Max results (default: 10) |
+| `-r, --regex` | Use regex search |
+| `--since YYYY-MM-DD` | Filter sessions since date |
+| `--today` | Only today's sessions |
+| `--compact` | Compact output (for AI tools) |
 | `--json` | Output as JSON |
+
+### Global Options
+
+| Flag | Description |
+| ---- | ----------- |
+| `-q, --quiet` | Suppress warnings on stderr |
+| `--json` | JSON output (available on all commands) |
 
 ### Examples
 
@@ -68,14 +84,26 @@ pickel search "auth middleware"
 # Search within a specific project
 pickel search "migration" -p my-app
 
+# Regex search
+pickel search -r "TODO|FIXME|HACK"
+
+# Today's sessions only
+pickel search "deploy" --today
+
 # List projects
 pickel projects
 
 # What did I last work on?
 pickel last my-app
 
-# Resume a session
+# Show session context
 pickel context a1b2c3d4
+
+# View a chat session
+pickel chat -p my-app
+
+# Estimate costs
+pickel cost --month
 ```
 
 ### Project List
@@ -92,7 +120,7 @@ $ pickel projects
   docs-site                          7   12.0M     5d
   ...
 
-  58 sessions · 240 MB total
+  58 sessions · 0.2 GB total
 ```
 
 ### Last Session

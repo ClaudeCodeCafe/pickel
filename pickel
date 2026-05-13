@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # ── Color ────────────────────────────────────────────────────────
 
@@ -87,27 +87,72 @@ _EXCLUDED_DIRS = {"-claude-mem-observer-sessions", "subagents"}
 def normalize_project_name(dirname: str) -> str:
     """Turn long dir names into short project names.
 
-    Detects patterns like -Users-{user}--ghq-github-com-{org}-{project}
-    and returns just the last segment ({project}).
+    Claude encodes filesystem paths by replacing ``/`` with ``-`` and ``.``
+    with ``-``.  Double ``--`` marks a dotfile directory boundary
+    (e.g. ``/.ghq/`` becomes ``--ghq-``).
+
+    Examples::
+
+        -Users-alice--ghq-github-com-org-my-app  -> my-app
+        -Users-bob--ghq-github-com-bob-cool-lib   -> cool-lib
+        -Users-bob-Documents-zombie-automation     -> Documents-zombie-automation
     """
-    name = dirname
-    # Generic pattern: -Users-<user>-...-<last_segment>
-    # Matches paths encoded as dash-separated directory components
-    m = re.match(r"^-Users-[^-]+-.*-([^-]+)$", name)
+    # ghq / GitHub pattern: -github-com-{org}-{repo}
+    m = re.search(r"-github-com-([^-]+)-(.+)$", dirname)
     if m:
-        return m.group(1)
-    return name or dirname
+        return m.group(2)
+
+    # Generic encoded path
+    if dirname.startswith("-"):
+        path = dirname[1:]
+        # Split on -- (dotfile directory boundaries)
+        segments = path.split("--")
+        last_seg = segments[-1]
+
+        # Strip Users-{user}- prefix if present
+        m2 = re.match(r"^Users-[^-]+-(.*)", last_seg)
+        if m2 and m2.group(1):
+            return m2.group(1)
+
+        # -Users-{user} with no sub-path
+        m3 = re.match(r"^Users-(.+)", last_seg)
+        if m3:
+            return m3.group(1)
+
+        return last_seg
+
+    return dirname
 
 
 def find_projects(base: Path) -> dict[str, Path]:
-    """Return {short_name: path} for all projects."""
-    projects = {}
+    """Return {short_name: path} for all projects.
+
+    When two directories resolve to the same short name, the parent
+    directory info is appended to disambiguate (e.g. ``my-app (org1)``
+    vs ``my-app (org2)``).
+    """
+    projects: dict[str, Path] = {}
     if not base.is_dir():
         return projects
+
+    # First pass: collect name -> list of (dirname, path)
+    name_to_dirs: dict[str, list[tuple[str, Path]]] = {}
     for d in sorted(base.iterdir()):
         if d.is_dir() and not d.name.startswith(".") and d.name not in _EXCLUDED_DIRS:
             name = normalize_project_name(d.name)
-            projects[name] = d
+            name_to_dirs.setdefault(name, []).append((d.name, d))
+
+    # Second pass: disambiguate collisions
+    for name, dirs in name_to_dirs.items():
+        if len(dirs) == 1:
+            projects[name] = dirs[0][1]
+        else:
+            for dirname, path in dirs:
+                # Try to extract org from github-com-{org}-{repo}
+                m = re.search(r"-github-com-([^-]+)-", dirname)
+                suffix = m.group(1) if m else dirname[:16]
+                projects[f"{name} ({suffix})"] = path
+
     return projects
 
 
@@ -131,6 +176,30 @@ def _this_month_str() -> str:
     return datetime.now().strftime("%Y-%m")
 
 
+def _validate_date(date_str: str) -> str:
+    """Validate a YYYY-MM-DD date string. Exit with code 2 on failure."""
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        print(
+            f"pickel: invalid date '{date_str}' (expected YYYY-MM-DD)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return date_str
+
+
+# ── Quiet mode ──────────────────────────────────────────────────
+
+_QUIET = False
+
+
+def _warn(msg: str) -> None:
+    """Print a warning to stderr unless --quiet is set."""
+    if not _QUIET:
+        print(f"pickel: warning: {msg}", file=sys.stderr)
+
+
 # ── JSONL Parser ─────────────────────────────────────────────────
 
 
@@ -138,15 +207,17 @@ def iter_messages(jsonl_path: Path):
     """Yield parsed entries from a .jsonl session file."""
     try:
         with open(jsonl_path, "r", encoding="utf-8") as f:
-            for line in f:
+            for lineno, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     yield json.loads(line)
                 except json.JSONDecodeError:
+                    _warn(f"{jsonl_path.name}:{lineno}: invalid JSON, skipping")
                     continue
-    except (OSError, IOError):
+    except (OSError, IOError) as e:
+        _warn(f"cannot read {jsonl_path}: {e}")
         return
 
 
@@ -187,7 +258,7 @@ def cmd_search(args):
     base = get_projects_dir()
     projects = find_projects(base)
     use_regex = getattr(args, "regex", False)
-    max_results = args.max or 10
+    max_results = args.max
     project_filter = args.project
     compact = getattr(args, "compact", False)
 
@@ -196,7 +267,7 @@ def cmd_search(args):
     if getattr(args, "today", False):
         since_date = _today_str()
     elif getattr(args, "since", None):
-        since_date = args.since
+        since_date = _validate_date(args.since)
 
     # Build match function
     if use_regex:
@@ -432,8 +503,11 @@ def cmd_last(args):
             m = msg.get("model", "")
             if m and not m.startswith("<"):
                 model = m
-            usage = msg.get("usage", {})
-            total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            usage = msg.get("usage") or {}
+            if isinstance(usage, dict):
+                total_tokens += usage.get("input_tokens", 0) + usage.get(
+                    "output_tokens", 0
+                )
             if text:
                 last_assistant = text.strip().split("\n")[0][:100]
 
@@ -813,6 +887,7 @@ def cmd_cost(args):
     cost_rates = {
         "opus": {"input": 15.0, "output": 75.0},
         "sonnet": {"input": 3.0, "output": 15.0},
+        "haiku": {"input": 0.25, "output": 1.25},
     }
 
     # model_name -> {input_tokens, output_tokens}
@@ -835,9 +910,10 @@ def cmd_cost(args):
                 model = msg.get("model", "unknown")
                 if not model or model.startswith("<"):
                     model = "unknown"
-                usage = msg.get("usage", {})
-                model_usage[model]["input_tokens"] += usage.get("input_tokens", 0)
-                model_usage[model]["output_tokens"] += usage.get("output_tokens", 0)
+                usage = msg.get("usage") or {}
+                if isinstance(usage, dict):
+                    model_usage[model]["input_tokens"] += usage.get("input_tokens", 0)
+                    model_usage[model]["output_tokens"] += usage.get("output_tokens", 0)
 
     # Compute costs
     results = []
@@ -852,23 +928,32 @@ def cmd_cost(args):
         total_output += out
 
         # Determine rate tier
-        rate_key = "sonnet"  # default
+        rate_key = None
         model_lower = model.lower()
         if "opus" in model_lower:
             rate_key = "opus"
         elif "sonnet" in model_lower:
             rate_key = "sonnet"
+        elif "haiku" in model_lower:
+            rate_key = "haiku"
 
-        rates = cost_rates[rate_key]
-        cost = (inp / 1_000_000 * rates["input"]) + (out / 1_000_000 * rates["output"])
-        total_cost += cost
+        if rate_key:
+            rates = cost_rates[rate_key]
+            cost = (inp / 1_000_000 * rates["input"]) + (
+                out / 1_000_000 * rates["output"]
+            )
+        else:
+            cost = None  # uncosted — unknown model
+
+        if cost is not None:
+            total_cost += cost
 
         results.append(
             {
                 "model": model,
                 "input_tokens": inp,
                 "output_tokens": out,
-                "cost_usd": round(cost, 2),
+                "cost_usd": round(cost, 2) if cost is not None else None,
             }
         )
 
@@ -896,23 +981,42 @@ def cmd_cost(args):
         f"  {bold('MODEL'):<45} {bold('INPUT'):>12} {bold('OUTPUT'):>12} {bold('COST'):>10}"
     )
     print(f"  {'─' * 45} {'─' * 12} {'─' * 12} {'─' * 10}")
+    uncosted = []
     for r in results:
         inp_str = f"{r['input_tokens']:,}"
         out_str = f"{r['output_tokens']:,}"
-        cost_str = f"${r['cost_usd']:.2f}"
+        if r["cost_usd"] is not None:
+            cost_str = f"${r['cost_usd']:.2f}"
+        else:
+            cost_str = dim("n/a")
+            uncosted.append(r["model"])
         print(f"  {r['model']:<45} {inp_str:>12} {out_str:>12} {cost_str:>10}")
     print(f"  {'─' * 45} {'─' * 12} {'─' * 12} {'─' * 10}")
     print(
         f"  {bold('TOTAL'):<45} {total_input:>12,} {total_output:>12,} "
         f"{bold(f'${total_cost:.2f}'):>10}"
     )
+    if uncosted:
+        uncosted_str = ", ".join(uncosted)
+        print(f"\n  {dim('Uncosted models: ' + uncosted_str)}")
     print(
-        f"\n  {dim('Rates: opus $15/$75, sonnet $3/$15 per 1M tokens (input/output)')}"
+        f"\n  {dim('Rates: opus $15/$75, sonnet $3/$15, haiku $0.25/$1.25 per 1M tokens')}"
     )
     print()
 
 
 # ── CLI ──────────────────────────────────────────────────────────
+
+
+def _positive_int(value: str) -> int:
+    """argparse type: positive integer (>= 1)."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer: '{value}'")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -921,6 +1025,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="⛏️  A pickaxe for mining Claude Code conversation logs",
     )
     p.add_argument("-V", "--version", action="version", version=f"pickel {__version__}")
+    p.add_argument(
+        "-q", "--quiet", action="store_true", help="Suppress warnings on stderr"
+    )
 
     sub = p.add_subparsers(dest="command")
 
@@ -929,7 +1036,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("query", help="Search query")
     s.add_argument("-p", "--project", help="Filter by project name")
     s.add_argument(
-        "-m", "--max", type=int, default=10, help="Max results (default: 10)"
+        "-m",
+        "--max",
+        type=_positive_int,
+        default=10,
+        help="Max results (default: 10)",
     )
     s.add_argument("-r", "--regex", action="store_true", help="Use regex search")
     s.add_argument("--since", help="Filter sessions since date (YYYY-MM-DD)")
@@ -940,7 +1051,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true", help="JSON output")
 
     # context
-    ctx = sub.add_parser("context", aliases=["ctx"], help="Session context summary")
+    ctx = sub.add_parser("context", aliases=["ctx"], help="Show session context")
     ctx.add_argument("session", help="Session ID (partial match)")
     ctx.add_argument("-p", "--project", help="Filter by project")
     ctx.add_argument("--json", action="store_true", help="JSON output")
@@ -958,7 +1069,11 @@ def build_parser() -> argparse.ArgumentParser:
     ch = sub.add_parser("chat", help="Show session conversation in chat format")
     ch.add_argument("session", nargs="?", help="Session ID (partial match)")
     ch.add_argument("-p", "--project", help="Project name")
-    ch.add_argument("--last", type=int, help="Show last N sessions (default: 1)")
+    ch.add_argument(
+        "--last",
+        type=_positive_int,
+        help="Show last N sessions (default: 1)",
+    )
     ch.add_argument("--json", action="store_true", help="JSON output")
 
     # errors
@@ -982,8 +1097,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    global _QUIET
     parser = build_parser()
     args = parser.parse_args()
+
+    if getattr(args, "quiet", False):
+        _QUIET = True
 
     if not args.command:
         parser.print_help()
