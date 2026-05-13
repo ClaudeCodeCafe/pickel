@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Verify pickel is executable
+        run: test -x ./pickel
+
+      - name: Show version
+        run: python ./pickel --version
+
+      - name: Show help
+        run: python ./pickel --help
+
+      - name: Run projects (should not crash on empty dir)
+        run: python ./pickel projects
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Install from wheel
+        run: pip install dist/*.whl
+
+      - name: Verify installed pickel --version
+        run: pickel --version | grep -q "pickel 0.1.0"
+
+      - name: Install from sdist
+        run: |
+          pip uninstall -y pickel-cli
+          pip install dist/*.tar.gz
+
+      - name: Verify sdist install
+        run: pickel --version | grep -q "pickel 0.1.0"
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint with ruff
+        run: ruff check pickel src/
+
+      - name: Check formatting with ruff
+        run: ruff format --check pickel src/
+
+  sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Verify pickel and src/pickel/cli.py are in sync
+        run: |
+          tail -n +2 ./pickel > /tmp/pickel_body.py
+          if ! diff -u src/pickel/cli.py /tmp/pickel_body.py; then
+            echo "ERROR: pickel (minus shebang) and src/pickel/cli.py are out of sync"
+            exit 1
+          fi
+          echo "OK: pickel and src/pickel/cli.py are in sync"
