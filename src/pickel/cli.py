@@ -99,8 +99,14 @@ def normalize_project_name(dirname: str) -> str:
         -Users-alice--ghq-github-com-org-my-app  -> my-app
         -Users-bob--ghq-github-com-bob-cool-lib   -> cool-lib
         -Users-bob-Documents-zombie-automation     -> Documents-zombie-automation
+
+    Owner is treated as a single non-hyphenated segment.  For owners
+    that *contain* hyphens (e.g. ``my-org``), only the first segment is
+    consumed as the owner and the rest becomes part of the repo name.
+    This is an accepted limitation of the path-encoding scheme.
     """
-    # ghq / GitHub pattern: -github-com-{org}-{repo}
+    # ghq / GitHub pattern: -github-com-{owner}-{everything-else}
+    # owner = first non-hyphenated segment after "-github-com-"
     m = re.search(r"-github-com-([^-]+)-(.+)$", dirname)
     if m:
         return m.group(2)
@@ -166,7 +172,11 @@ def find_projects(base: Path) -> dict[str, Path]:
 
 def find_sessions(project_dir: Path) -> list[Path]:
     """Return all .jsonl session files sorted by mtime desc."""
-    files = list(project_dir.glob("*.jsonl"))
+    try:
+        files = list(project_dir.glob("*.jsonl"))
+    except OSError as e:
+        _warn(f"cannot list {project_dir}: {e}")
+        return []
     timed: list[tuple[float, Path]] = []
     for f in files:
         try:
@@ -406,7 +416,8 @@ def cmd_search(args):
             print(f"    {dim(_sanitize(current_session))}")
 
         icon = "U" if r["role"] == "user" else "A"
-        ts = r["timestamp"][:16].replace("T", " ") if r["timestamp"] else ""
+        raw_ts = r["timestamp"]
+        ts = raw_ts[:16].replace("T", " ") if isinstance(raw_ts, str) and raw_ts else ""
 
         # Highlight the query in the line
         line = _sanitize(r["line"])
@@ -499,7 +510,9 @@ def cmd_context(args):
         print(f"    {dim(str(i + 1) + '.'):>5} {_sanitize(first_line)}")
     if len(user_msgs) > 15:
         print(f"    {dim(f'  ...+{len(user_msgs) - 15} more')}")
-    print(f"\n  {bold('Tools used')}: {', '.join(sorted(tools_used)) or 'none'}")
+    print(
+        f"\n  {bold('Tools used')}: {', '.join(_sanitize(t) for t in sorted(tools_used)) or 'none'}"
+    )
     print()
 
 
@@ -612,7 +625,11 @@ def cmd_projects(args):
 
     rows = []
     for name, pdir in projects.items():
-        sessions = list(pdir.glob("*.jsonl"))
+        try:
+            sessions = list(pdir.glob("*.jsonl"))
+        except OSError as e:
+            _warn(f"cannot list {pdir}: {e}")
+            continue
         total_size = 0
         last_mod = 0
         session_count = 0
@@ -792,7 +809,12 @@ def cmd_chat(args):
         )
         for m in conv["messages"]:
             icon = "U" if m["role"] == "user" else "A"
-            ts = m["timestamp"][:16].replace("T", " ") if m["timestamp"] else ""
+            raw_ts = m["timestamp"]
+            ts = (
+                raw_ts[:16].replace("T", " ")
+                if isinstance(raw_ts, str) and raw_ts
+                else ""
+            )
             print(f"  {dim(ts)} {icon}")
             for line in m["text"].split("\n"):
                 print(f"    {_sanitize(line)}")
@@ -893,7 +915,12 @@ def cmd_errors(args):
     if corrections:
         print(f"  {bold('User corrections')} ({len(corrections)})")
         for r in corrections[:20]:
-            ts = r["timestamp"][:16].replace("T", " ") if r["timestamp"] else ""
+            raw_ts = r["timestamp"]
+            ts = (
+                raw_ts[:16].replace("T", " ")
+                if isinstance(raw_ts, str) and raw_ts
+                else ""
+            )
             print(
                 f"    {dim(ts)} {orange(_sanitize(r['project']))} "
                 f"{dim(_sanitize(r['session']))} {_sanitize(r['text'])}"
@@ -905,7 +932,12 @@ def cmd_errors(args):
     if api_errors:
         print(f"  {red('API errors')} ({len(api_errors)})")
         for r in api_errors[:20]:
-            ts = r["timestamp"][:16].replace("T", " ") if r["timestamp"] else ""
+            raw_ts = r["timestamp"]
+            ts = (
+                raw_ts[:16].replace("T", " ")
+                if isinstance(raw_ts, str) and raw_ts
+                else ""
+            )
             print(
                 f"    {dim(ts)} {orange(_sanitize(r['project']))} "
                 f"{dim(_sanitize(r['session']))} {_sanitize(r['text'])}"
