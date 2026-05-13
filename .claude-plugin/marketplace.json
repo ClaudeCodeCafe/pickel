@@ -1,0 +1,31 @@
+{
+  "name": "pickel",
+  "id": "pickel",
+  "owner": {
+    "name": "ClaudeCodeCafe"
+  },
+  "metadata": {
+    "description": "Mine your Claude Code conversation logs. Zero-dependency Python CLI for searching past sessions.",
+    "version": "0.4.0"
+  },
+  "plugins": [
+    {
+      "name": "pickel",
+      "source": "./",
+      "description": "Search past Claude Code sessions, list projects, show last session summaries, and estimate token costs. Includes /search, /last, /cost commands and auto-detection skill.",
+      "version": "0.4.0",
+      "author": {
+        "name": "ClaudeCodeCafe"
+      },
+      "keywords": [
+        "claude",
+        "conversations",
+        "logs",
+        "search",
+        "history",
+        "mining"
+      ],
+      "category": "tools"
+    }
+  ]
+}

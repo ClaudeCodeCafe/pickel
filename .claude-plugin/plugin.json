@@ -1,0 +1,12 @@
+{
+  "name": "pickel",
+  "description": "Mine your Claude Code conversation logs. Search past sessions, list projects, check costs, and surface what you built before.",
+  "version": "0.4.0",
+  "author": {
+    "name": "ClaudeCodeCafe"
+  },
+  "license": "MIT",
+  "keywords": ["claude", "conversations", "logs", "search", "history", "mining"],
+  "skills": ["./skills/conversation-mining"],
+  "commands": ["./commands"]
+}

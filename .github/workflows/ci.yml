@@ -62,7 +62,7 @@ jobs:
         run: pip install dist/*.whl
 
       - name: Verify installed pickel --version
-        run: pickel --version | grep -q "pickel 0.3.2"
+        run: pickel --version | grep -q "pickel 0.4.0"
 
       - name: Run smoke tests against installed package
         run: PICKEL=pickel bash tests/smoke.sh
@@ -73,7 +73,7 @@ jobs:
           pip install dist/*.tar.gz
 
       - name: Verify sdist install
-        run: pickel --version | grep -q "pickel 0.3.2"
+        run: pickel --version | grep -q "pickel 0.4.0"
 
       - name: Run smoke tests against sdist install
         run: PICKEL=pickel bash tests/smoke.sh
@@ -127,5 +127,17 @@ jobs:
             exit 1
           fi
           echo "OK: all version strings match ($CLI_VER)"
+
+      - name: Verify plugin version matches pyproject.toml
+        run: |
+          TOML_VER=$(python -c "import re, pathlib; m=re.search(r'^version\s*=\s*\"([^\"]+)\"', pathlib.Path('pyproject.toml').read_text(), re.MULTILINE); print(m.group(1))")
+          PLUGIN_VER=$(python -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          MARKET_VER=$(python -c "import json; print(json.load(open('.claude-plugin/marketplace.json'))['metadata']['version'])")
+          echo "pyproject.toml=$TOML_VER  plugin.json=$PLUGIN_VER  marketplace.json=$MARKET_VER"
+          if [ "$TOML_VER" != "$PLUGIN_VER" ] || [ "$TOML_VER" != "$MARKET_VER" ]; then
+            echo "ERROR: plugin version mismatch — run version-sync workflow or update .claude-plugin/ manually"
+            exit 1
+          fi
+          echo "OK: plugin version matches ($TOML_VER)"
 
   # TODO: publish workflow — add when ready for automated PyPI releases

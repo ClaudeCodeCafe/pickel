@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 # ── Color ────────────────────────────────────────────────────────
 

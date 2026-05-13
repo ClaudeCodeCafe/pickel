@@ -143,6 +143,39 @@ $ pickel last my-app
     A Added 4 test cases covering timeout, network error...
 ```
 
+## Claude Code Plugin
+
+pickel is available as a Claude Code marketplace plugin.
+
+### Install
+
+Install via the Claude Code marketplace, or add it directly to your project:
+
+```bash
+# In your Claude Code settings or CLAUDE.md
+# Plugin source: https://github.com/ClaudeCodeCafe/pickel
+```
+
+### Commands
+
+| Command | Description |
+| ------- | ----------- |
+| `/pickel:search <query>` | Search past conversation logs |
+| `/pickel:last [project]` | Show the last session for a project |
+| `/pickel:cost` | Estimate token costs |
+| `/pickel:setup` | Check plugin readiness |
+
+### Skill: Conversation Mining
+
+The plugin includes a `conversation-mining` skill that auto-triggers when you ask about past work:
+
+- "前のセッションで何やった？"
+- "この問題前に解決した？"
+- "先週何を作った？"
+- "did we implement this before?"
+
+Claude will automatically run `pickel search` or `pickel last` to surface relevant past sessions.
+
 ## Security / Privacy
 
 Claude Code conversation logs may contain sensitive information such as API

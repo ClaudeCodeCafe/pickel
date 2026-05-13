@@ -1,0 +1,64 @@
+name: Version Sync
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'pyproject.toml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync-plugin-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get pyproject.toml version
+        id: pyproject
+        run: |
+          VER=$(python3 -c "import re, pathlib; m=re.search(r'^version\s*=\s*\"([^\"]+)\"', pathlib.Path('pyproject.toml').read_text(), re.MULTILINE); print(m.group(1))")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Get plugin.json version
+        id: plugin
+        run: |
+          VER=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Update plugin versions
+        if: steps.pyproject.outputs.version != steps.plugin.outputs.version
+        env:
+          VERSION: ${{ steps.pyproject.outputs.version }}
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          version = os.environ["VERSION"]
+
+          path = ".claude-plugin/plugin.json"
+          data = json.load(open(path))
+          data["version"] = version
+          with open(path, "w") as f:
+              json.dump(data, f, indent=2)
+              f.write("\n")
+
+          path = ".claude-plugin/marketplace.json"
+          data = json.load(open(path))
+          data["metadata"]["version"] = version
+          data["plugins"][0]["version"] = version
+          with open(path, "w") as f:
+              json.dump(data, f, indent=2)
+              f.write("\n")
+          EOF
+
+      - name: Commit and push
+        if: steps.pyproject.outputs.version != steps.plugin.outputs.version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json
+          git diff --cached --quiet || git commit -m "chore: sync plugin version to ${{ steps.pyproject.outputs.version }}"
+          git push
