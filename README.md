@@ -208,10 +208,10 @@ pickel mine --transcript path/to/session.jsonl  # extract from a specific sessio
 
 The plugin includes a `conversation-mining` skill that auto-triggers when you ask about past work:
 
-- "前のセッションで何やった？"
-- "この問題前に解決した？"
-- "先週何を作った？"
-- "did we implement this before?"
+- "What did we do in the last session?"
+- "Did we solve this problem before?"
+- "What did I build last week?"
+- "Did we implement this before?"
 
 Claude will automatically run `pickel search` or `pickel last` to surface relevant past sessions.
 
