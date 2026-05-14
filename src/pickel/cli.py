@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 # ── Color ────────────────────────────────────────────────────────
 
@@ -99,6 +99,39 @@ def _safe_int(val: object) -> int:
 def get_projects_dir() -> Path:
     config = os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))
     return Path(config) / "projects"
+
+
+def get_ores_dir() -> Path:
+    return Path(os.environ.get("PICKEL_ORES_DIR", os.path.expanduser("~/.pickel/ores")))
+
+
+def _sanitize_project_name(name: str) -> "Optional[str]":
+    """Validate a project name to prevent path traversal.
+
+    Rejects names containing slashes, backslashes, parent-directory
+    references (``..``), or leading dots.
+    """
+    if not name or '/' in name or '\\' in name or '..' in name or name.startswith('.'):
+        return None
+    return name
+
+
+def _project_name_from_cwd(cwd: str) -> "Optional[str]":
+    if not cwd:
+        return None
+    p = Path(cwd)
+    name = p.name
+    if not name:
+        return None
+    # GitHub / ghq structure: parent = org name
+    parent = p.parent.name
+    if parent and parent not in ('', '.', 'src', 'home', 'Users'):
+        # ghq structure: github.com/org/repo -> org-repo
+        grandparent = p.parent.parent.name
+        if grandparent in ('github.com', 'gitlab.com', 'bitbucket.org'):
+            result = f"{parent}-{name}"
+            return _sanitize_project_name(result) and result or None
+    return _sanitize_project_name(name) and name or None
 
 
 # Directories to exclude from project listing
@@ -228,6 +261,25 @@ def _today_str() -> str:
 
 def _this_month_str() -> str:
     return datetime.now().strftime("%Y-%m")
+
+
+def _format_age(seconds: float) -> str:
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds / 60)}m ago"
+    if seconds < 86400:
+        return f"{int(seconds / 3600)}h ago"
+    return f"{int(seconds / 86400)}d ago"
+
+
+def _format_size(nbytes: int) -> str:
+    if nbytes < 1024:
+        return f"{nbytes}B"
+    kb = nbytes / 1024
+    if kb < 1024:
+        return f"{kb:.1f}K"
+    return f"{kb / 1024:.1f}M"
 
 
 def _validate_date(date_str: str) -> str:
@@ -1218,6 +1270,401 @@ def cmd_cost(args):
     print()
 
 
+def _calculate_session_cost(transcript_path: "Optional[Path]") -> "Optional[str]":
+    """Return a one-line cost summary for a single transcript, or None."""
+    if transcript_path is None or not transcript_path.exists():
+        return None
+
+    cost_rates = {
+        "opus": {"input": 15.0, "output": 75.0},
+        "sonnet": {"input": 3.0, "output": 15.0},
+        "haiku": {"input": 0.25, "output": 1.25},
+    }
+    model_usage: dict = defaultdict(lambda: {"input_tokens": 0, "output_tokens": 0})
+
+    for entry in iter_messages(transcript_path):
+        if entry.get("type") != "assistant":
+            continue
+        msg = entry.get("message", {})
+        if not isinstance(msg, dict):
+            continue
+        model = msg.get("model", "unknown")
+        if not isinstance(model, str) or not model or model.startswith("<"):
+            model = "unknown"
+        usage = msg.get("usage") or {}
+        if isinstance(usage, dict):
+            input_total = (
+                _safe_int(usage.get("input_tokens", 0))
+                + _safe_int(usage.get("cache_creation_input_tokens", 0))
+                + _safe_int(usage.get("cache_read_input_tokens", 0))
+            )
+            model_usage[model]["input_tokens"] += input_total
+            model_usage[model]["output_tokens"] += _safe_int(usage.get("output_tokens", 0))
+
+    if not model_usage:
+        return None
+
+    total_cost = 0.0
+    total_tokens = 0
+    model_costs: list = []
+
+    for model, usage in model_usage.items():
+        inp = usage["input_tokens"]
+        out = usage["output_tokens"]
+        tokens = inp + out
+        total_tokens += tokens
+        model_lower = model.lower()
+        rate_key = None
+        if "opus" in model_lower:
+            rate_key = "opus"
+        elif "sonnet" in model_lower:
+            rate_key = "sonnet"
+        elif "haiku" in model_lower:
+            rate_key = "haiku"
+        if rate_key:
+            rates = cost_rates[rate_key]
+            cost = (inp / 1_000_000 * rates["input"]) + (out / 1_000_000 * rates["output"])
+            total_cost += cost
+            model_costs.append((model, cost, tokens))
+
+    if not total_tokens:
+        return None
+
+    parts = []
+    for model, _cost, tokens in sorted(model_costs, key=lambda x: -x[2]):
+        pct = int(tokens / total_tokens * 100) if total_tokens else 0
+        tier = "n/a"
+        if "opus" in model.lower():
+            tier = "Opus"
+        elif "sonnet" in model.lower():
+            tier = "Sonnet"
+        elif "haiku" in model.lower():
+            tier = "Haiku"
+        parts.append(f"{tier} {pct}%")
+
+    breakdown = ", ".join(parts) if parts else "n/a"
+
+    # Don't return cost string when cost is $0.00
+    if total_cost < 0.005:
+        return None
+
+    return f"Estimated: ${total_cost:.2f} ({breakdown})"
+
+
+def _ore_build_content(
+    extracted: dict,
+    session_id: str,
+    project_name: str,
+    cost_str: "Optional[str]" = None,
+    trigger: str = "session-end",
+) -> str:
+    """Build ore markdown from extracted context. Returns empty string if no content."""
+    has_content = any(
+        extracted.get(k) for k in ("decisions", "discoveries", "errors_fixes", "unfinished")
+    )
+    if not has_content and not cost_str:
+        return ""
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    sid_short = session_id[:8] if session_id else "unknown"
+    lines = [
+        f"# Ore — {now}",
+        f"<!-- session: {sid_short} | project: {project_name} | trigger: {trigger} -->",
+        "",
+    ]
+    for section, key in [
+        ("Decisions", "decisions"),
+        ("Discoveries", "discoveries"),
+        ("Errors & Fixes", "errors_fixes"),
+        ("Unfinished", "unfinished"),
+    ]:
+        items = extracted.get(key, [])
+        if items:
+            lines.append(f"## {section}")
+            for item in items:
+                lines.append(f"- {item}")
+            lines.append("")
+
+    if cost_str:
+        lines.append("## Cost")
+        lines.append(f"- {cost_str}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _ore_save(
+    project_name: str, session_id: str, content: str, suffix: str = ""
+) -> "Optional[Path]":
+    """Save ore to ~/.pickel/ores/{project_name}/{date}-{session_id[:8]}{suffix}.md"""
+    if not project_name or not content.strip():
+        return None
+    ores_dir = get_ores_dir() / project_name
+    try:
+        ores_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as e:
+        _warn(f"cannot create ores dir: {e}")
+        return None
+    sid = session_id[:8] if session_id else "unknown"
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"{date_str}-{sid}{suffix}.md"
+    ore_path = ores_dir / filename
+    try:
+        ore_path.write_text(content, encoding="utf-8")
+        os.chmod(str(ore_path), 0o600)
+    except OSError as e:
+        _warn(f"cannot write ore: {e}")
+        return None
+    return ore_path
+
+
+# ── Wrap ─────────────────────────────────────────────────────────
+
+
+def cmd_wrap(args) -> None:
+    """Save session summary to ~/.pickel/ores/ (SessionEnd hook)."""
+    stdin_data: dict = {}
+    if not sys.stdin.isatty():
+        try:
+            raw = sys.stdin.read().strip()
+            if raw:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    stdin_data = parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    tp = stdin_data.get("transcript_path")
+    transcript_path: "Optional[Path]" = None
+    if isinstance(tp, str) and tp:
+        projects_dir = get_projects_dir().resolve()
+        resolved = Path(tp).resolve()
+        try:
+            resolved.relative_to(projects_dir)
+            transcript_path = resolved
+        except ValueError:
+            _warn(f"transcript_path outside projects dir: {tp}")
+
+    if transcript_path is None:
+        return
+
+    session_id = stdin_data.get("session_id", "") or ""
+    cwd = stdin_data.get("cwd", "") or ""
+    project_name = _project_name_from_cwd(cwd) if cwd else None
+    if not project_name:
+        return
+
+    extracted = _mine_extract_context(transcript_path)
+
+    # Don't save cost-only ores (no decisions/discoveries/errors/unfinished)
+    has_context = any(
+        extracted.get(k)
+        for k in ("decisions", "discoveries", "errors_fixes", "unfinished")
+    )
+    if not has_context:
+        return
+
+    cost_str = _calculate_session_cost(transcript_path)
+    content = _ore_build_content(extracted, session_id, project_name, cost_str, "session-end")
+
+    if content.strip():
+        _ore_save(project_name, session_id or "unknown", content)
+
+
+# ── Recall ───────────────────────────────────────────────────────
+
+_RECALL_MAX = 5000
+
+
+def cmd_recall(args) -> None:
+    """Load previous session context (SessionStart hook)."""
+    stdin_data: dict = {}
+    if not sys.stdin.isatty():
+        try:
+            raw = sys.stdin.read().strip()
+            if raw:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    stdin_data = parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    source = stdin_data.get("source", "")
+    if source and source != "startup":
+        return
+
+    cwd = stdin_data.get("cwd", "") or ""
+    project_name = _project_name_from_cwd(cwd) if cwd else None
+    if not project_name:
+        return
+
+    ores_dir = get_ores_dir() / project_name
+    if not ores_dir.is_dir():
+        return
+
+    try:
+        ore_files = [f for f in ores_dir.iterdir() if f.suffix == ".md"]
+        ore_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return
+
+    if not ore_files:
+        return
+
+    try:
+        content = ore_files[0].read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    if len(content) > _RECALL_MAX:
+        content = content[: _RECALL_MAX - 3] + "..."
+
+    print(content)
+
+
+# ── Ores ─────────────────────────────────────────────────────────
+
+
+def cmd_ores(args) -> None:
+    """List and view saved ores."""
+    action = getattr(args, "action", "list") or "list"
+    project_filter = getattr(args, "project", None)
+    ores_base = get_ores_dir()
+
+    if project_filter:
+        sanitized = _sanitize_project_name(project_filter)
+        if sanitized is None:
+            print(f"pickel: invalid project name: {project_filter}", file=sys.stderr)
+            sys.exit(1)
+        project_filter = sanitized
+
+    if action == "show":
+        _ores_show(ores_base, project_filter)
+        return
+
+    _ores_list(ores_base, project_filter, getattr(args, "json", False))
+
+
+def _ores_show(ores_base: Path, project_filter: "Optional[str]") -> None:
+    if project_filter:
+        target_dir = ores_base / project_filter
+        if not target_dir.is_dir():
+            print(f"No ores found for project: {project_filter}")
+            return
+        try:
+            ore_files = sorted(
+                (f for f in target_dir.glob("*.md")),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            ore_files = []
+        if not ore_files:
+            print(f"No ores found for project: {project_filter}")
+            return
+        try:
+            print(ore_files[0].read_text(encoding="utf-8"))
+        except OSError as e:
+            print(f"pickel: cannot read ore: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    best_file: "Optional[Path]" = None
+    best_mtime = 0.0
+    if ores_base.is_dir():
+        try:
+            for proj_dir in ores_base.iterdir():
+                if not proj_dir.is_dir():
+                    continue
+                for ore_file in proj_dir.glob("*.md"):
+                    try:
+                        mtime = ore_file.stat().st_mtime
+                        if mtime > best_mtime:
+                            best_mtime = mtime
+                            best_file = ore_file
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
+    if best_file is None:
+        print("No ores found")
+        return
+    try:
+        print(best_file.read_text(encoding="utf-8"))
+    except OSError as e:
+        print(f"pickel: cannot read ore: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _ores_list(ores_base: Path, project_filter: "Optional[str]", as_json: bool) -> None:
+    project_rows: list = []
+
+    if ores_base.is_dir():
+        try:
+            for proj_dir in sorted(ores_base.iterdir()):
+                if not proj_dir.is_dir():
+                    continue
+                if project_filter and project_filter.lower() not in proj_dir.name.lower():
+                    continue
+                try:
+                    ore_files = sorted(
+                        (f for f in proj_dir.glob("*.md")),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                except OSError:
+                    continue
+                if not ore_files:
+                    continue
+                total_size = sum(f.stat().st_size for f in ore_files if f.exists())
+                latest_mtime = ore_files[0].stat().st_mtime
+                project_rows.append(
+                    {
+                        "name": proj_dir.name,
+                        "count": len(ore_files),
+                        "latest_mtime": latest_mtime,
+                        "total_size": total_size,
+                    }
+                )
+        except OSError as e:
+            _warn(f"cannot list ores dir: {e}")
+
+    if as_json:
+        print(json.dumps({"projects": project_rows}, ensure_ascii=False, indent=2))
+        return
+
+    print(f"  {dim('~/.pickel/ores/')}\n")
+
+    if not project_rows:
+        if project_filter:
+            print(f"  No ores found for project: {project_filter}")
+        else:
+            print("  No ores found")
+        return
+
+    now = time.time()
+    print(
+        f"  {bold('PROJECT'):<22} {bold('ORES'):>6}  {bold('LATEST'):<12} {bold('SIZE'):>8}"
+    )
+    print(f"  {'─' * 22} {'─' * 6}  {'─' * 12} {'─' * 8}")
+
+    total_ores = 0
+    total_size = 0
+    for proj in project_rows:
+        name = _sanitize(proj["name"])[:22]
+        count = proj["count"]
+        age = _format_age(now - proj["latest_mtime"])
+        size = _format_size(proj["total_size"])
+        total_ores += count
+        total_size += proj["total_size"]
+        print(f"  {name:<22} {count:>6}  {age:<12} {size:>8}")
+
+    print()
+    print(f"  {total_ores} ores · {_format_size(total_size)} total")
+    print()
+
+
 # ── Mine: helpers ────────────────────────────────────────────────
 
 
@@ -1502,6 +1949,18 @@ def cmd_mine(args) -> None:
     }
     print(json.dumps(output, ensure_ascii=False))
 
+    # Side-effect: persist ore (best-effort, failures are silently ignored)
+    try:
+        _sid = stdin_data.get("session_id", "") or ""
+        _cwd = stdin_data.get("cwd", "") or ""
+        _proj = _project_name_from_cwd(_cwd) if _cwd else None
+        if _proj and _sid:
+            _content = _ore_build_content(extracted, _sid, _proj, trigger="compact")
+            if _content.strip():
+                _ore_save(_proj, _sid, _content, suffix="-compact")
+    except Exception:
+        pass
+
 
 # ── CLI ──────────────────────────────────────────────────────────
 
@@ -1619,6 +2078,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show what would be extracted without hook output",
     )
 
+    # wrap
+    sub.add_parser("wrap", help="Save session summary to ores (SessionEnd hook)")
+
+    # recall
+    sub.add_parser("recall", help="Load previous session context (SessionStart hook)")
+
+    # ores
+    or_ = sub.add_parser("ores", help="List and view saved ores")
+    or_.add_argument(
+        "action",
+        nargs="?",
+        default="list",
+        choices=["list", "show"],
+        help="Action: list (default) or show",
+    )
+    or_.add_argument("-p", "--project", help="Filter by project name")
+    or_.add_argument("--json", action="store_true", help="JSON output")
+
     return p
 
 
@@ -1653,6 +2130,12 @@ def main():
         cmd_cost(args)
     elif cmd == "mine":
         cmd_mine(args)
+    elif cmd == "wrap":
+        cmd_wrap(args)
+    elif cmd == "recall":
+        cmd_recall(args)
+    elif cmd == "ores":
+        cmd_ores(args)
     else:
         parser.print_help()
 

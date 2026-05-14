@@ -1,5 +1,5 @@
 {
-  "description": "pickel mine — Auto-rescue context on compact",
+  "description": "pickel — Auto-rescue context on compact, recall on start, wrap on end",
   "hooks": {
     "PreCompact": [
       {
@@ -8,6 +8,31 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/pickel\" mine"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/pickel\" recall",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/pickel\" wrap",
+            "async": true,
+            "timeout": 30
           }
         ]
       }

@@ -17,6 +17,10 @@ fi
 
 export CLAUDE_CONFIG_DIR="$FIXTURES"
 
+# Isolate ores directory so tests don't touch real ~/.pickel/ores
+ORES_TMPDIR=$(mktemp -d)
+export PICKEL_ORES_DIR="$ORES_TMPDIR"
+
 fail() {
     echo "  FAIL: $1"
     exit 1
@@ -37,7 +41,7 @@ echo "=== pickel smoke tests ==="
 # ── Basic ────────────────────────────────────────────────────────
 
 echo "[1] --version"
-"${PICKEL_CMD[@]}" --version | grep -q "0.5.1"
+"${PICKEL_CMD[@]}" --version | grep -q "0.6.0"
 echo "  OK"
 
 echo "[2] --help"
@@ -314,7 +318,7 @@ fi
 
 echo "[35] malformed JSONL does not crash"
 MALFORMED_DIR=$(mktemp -d)
-trap 'rm -rf "$MALFORMED_DIR"' EXIT
+trap 'rm -rf "$MALFORMED_DIR" "$ORES_TMPDIR"' EXIT
 MALFORMED_PROJ="$MALFORMED_DIR/projects/test-malformed"
 mkdir -p "$MALFORMED_PROJ"
 printf '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}\n' > "$MALFORMED_PROJ/bad.jsonl"
@@ -391,6 +395,49 @@ echo "[43] mine --post should not exist"
 EC=0
 "${PICKEL_CMD[@]}" mine --post 2>/dev/null || EC=$?
 check_exit_code "$EC" 2 "[43] mine --post should not exist"
+
+# ── Wrap / Recall / Ores ─────────────────────────────────────────
+
+# [44] wrap saves an ore
+echo "[44] wrap saves an ore"
+echo '{"transcript_path": "'"$FIXTURES"'/projects/test-project/session1.jsonl", "session_id": "test123", "cwd": "/Users/test/.ghq/github.com/testorg/test-project"}' | "${PICKEL_CMD[@]}" wrap
+check_exit_code $? 0 "[44] wrap exits 0"
+
+# [45] ores list shows saved ore
+echo "[45] ores list shows saved ore"
+OUT=$("${PICKEL_CMD[@]}" ores)
+echo "$OUT" | grep -q "test" || fail "[45] ores list should show project"
+echo "  OK"
+
+# [46] ores show displays content
+echo "[46] ores show displays content"
+OUT=$("${PICKEL_CMD[@]}" ores show)
+echo "$OUT" | grep -q "Ore" || echo "$OUT" | grep -q "ore" || fail "[46] ores show should display ore"
+echo "  OK"
+
+# [47] ores --json
+echo "[47] ores --json"
+JSON=$("${PICKEL_CMD[@]}" ores --json)
+echo "$JSON" | "$PYTHON" -c "import json,sys; d=json.loads(sys.stdin.read()); assert len(d['projects']) > 0" || fail "[47] ores json should have projects"
+echo "  OK"
+
+# [48] recall loads previous ore
+echo "[48] recall loads previous ore"
+OUT=$(echo '{"cwd": "/Users/test/.ghq/github.com/testorg/test-project", "source": "startup"}' | "${PICKEL_CMD[@]}" recall)
+[ -n "$OUT" ] || fail "[48] recall should output something"
+echo "  OK"
+
+# [49] wrap with empty stdin exits 0
+echo "[49] wrap with empty stdin exits 0"
+EC=0
+echo '{}' | "${PICKEL_CMD[@]}" wrap 2>/dev/null || EC=$?
+check_exit_code "$EC" 0 "[49] wrap with empty stdin exits 0"
+
+# [50] recall with empty stdin exits 0
+echo "[50] recall with empty stdin exits 0"
+EC=0
+echo '{}' | "${PICKEL_CMD[@]}" recall 2>/dev/null || EC=$?
+check_exit_code "$EC" 0 "[50] recall with empty stdin exits 0"
 
 echo ""
 echo "=== All smoke tests passed ==="
