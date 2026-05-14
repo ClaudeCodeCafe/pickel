@@ -1445,7 +1445,8 @@ def _ore_save(
     except OSError as e:
         _warn(f"cannot create ores dir: {e}")
         return None
-    sid = session_id[:8] if session_id else "unknown"
+    safe_sid = _safe_session_id(session_id)
+    sid = safe_sid[:8]
     date_str = datetime.now().strftime("%Y-%m-%d")
     filename = f"{date_str}-{sid}{suffix}.md"
     ore_path = ores_dir / filename
