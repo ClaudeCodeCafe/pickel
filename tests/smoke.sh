@@ -355,7 +355,7 @@ echo "  OK"
 
 echo "[38] mine CLI mode outputs plain text (not JSON hookSpecificOutput)"
 OUT=$(echo '{}' | "${PICKEL_CMD[@]}" mine)
-echo "$OUT" | grep -qv "hookSpecificOutput" || fail "[38] CLI mode should not output hookSpecificOutput"
+echo "$OUT" | grep -q "hookSpecificOutput" && fail "[38] CLI mode should not output hookSpecificOutput" || true
 echo "  OK"
 
 # [39] mine with invalid JSON stdin
@@ -376,11 +376,11 @@ EC=0
 "${PICKEL_CMD[@]}" mine --transcript /nonexistent/path.jsonl 2>/dev/null || EC=$?
 check_exit_code "$EC" 1 "[41] mine --transcript missing file exits 1"
 
-# [42] mine hook mode saves .last-mine.md
-echo "[42] mine hook mode saves .last-mine.md"
-rm -f "$ORES_TMPDIR/.last-mine.md"
+# [42] mine hook mode saves .last-mine-unknown.md
+echo "[42] mine hook mode saves .last-mine-unknown.md"
+rm -f "$ORES_TMPDIR/.last-mine-unknown.md"
 echo '{"hook_event_name": "PreCompact"}' | "${PICKEL_CMD[@]}" mine 2>/dev/null
-[ -f "$ORES_TMPDIR/.last-mine.md" ] || fail "[42] mine should save .last-mine.md in hook mode"
+[ -f "$ORES_TMPDIR/.last-mine-unknown.md" ] || fail "[42] mine should save .last-mine-unknown.md in hook mode"
 echo "  OK"
 
 # [43] mine --post removed (should fail)
@@ -434,28 +434,28 @@ check_exit_code "$EC" 0 "[50] recall with empty stdin exits 0"
 
 # ── mine → recall pipeline ────────────────────────────────────────
 
-# [51] mine hook mode: empty stdout, .last-mine.md created
-echo "[51] mine hook mode: empty stdout, .last-mine.md created"
-rm -f "$ORES_TMPDIR/.last-mine.md"
+# [51] mine hook mode: empty stdout, .last-mine-s1.md created
+echo "[51] mine hook mode: empty stdout, .last-mine-s1.md created"
+rm -f "$ORES_TMPDIR/.last-mine-s1.md"
 OUT=$(echo '{"hook_event_name": "PreCompact", "transcript_path": "'"$FIXTURES"'/projects/test-project/session1.jsonl", "session_id": "s1", "cwd": "/x/y/test-project"}' | "${PICKEL_CMD[@]}" mine 2>/dev/null)
 [ -z "$OUT" ] || fail "[51] mine hook mode should output nothing to stdout"
-[ -f "$ORES_TMPDIR/.last-mine.md" ] || fail "[51] mine should save .last-mine.md"
+[ -f "$ORES_TMPDIR/.last-mine-s1.md" ] || fail "[51] mine should save .last-mine-s1.md"
 echo "  OK"
 
-# [52] recall compact source reads .last-mine.md
-echo "[52] recall compact source reads .last-mine.md"
-printf '# Rescued Context\nsome important note\n' > "$ORES_TMPDIR/.last-mine.md"
+# [52] recall compact source reads .last-mine-unknown.md
+echo "[52] recall compact source reads .last-mine-unknown.md"
+printf '# Rescued Context\nsome important note\n' > "$ORES_TMPDIR/.last-mine-unknown.md"
 OUT=$(echo '{"source": "compact"}' | "${PICKEL_CMD[@]}" recall)
-echo "$OUT" | grep -q "Rescued Context" || fail "[52] recall should output .last-mine.md content"
+echo "$OUT" | grep -q "Rescued Context" || fail "[52] recall should output .last-mine-unknown.md content"
 echo "  OK"
 
-# [53] mine → recall pipeline: .last-mine.md deleted after recall
-echo "[53] mine → recall pipeline: .last-mine.md deleted after recall"
-rm -f "$ORES_TMPDIR/.last-mine.md"
+# [53] mine → recall pipeline: .last-mine-unknown.md deleted after recall
+echo "[53] mine → recall pipeline: .last-mine-unknown.md deleted after recall"
+rm -f "$ORES_TMPDIR/.last-mine-unknown.md"
 echo '{"hook_event_name": "PreCompact"}' | "${PICKEL_CMD[@]}" mine 2>/dev/null
-[ -f "$ORES_TMPDIR/.last-mine.md" ] || fail "[53] mine should create .last-mine.md"
+[ -f "$ORES_TMPDIR/.last-mine-unknown.md" ] || fail "[53] mine should create .last-mine-unknown.md"
 echo '{"source": "compact"}' | "${PICKEL_CMD[@]}" recall 2>/dev/null
-[ ! -f "$ORES_TMPDIR/.last-mine.md" ] || fail "[53] recall should delete .last-mine.md after reading"
+[ ! -f "$ORES_TMPDIR/.last-mine-unknown.md" ] || fail "[53] recall should delete .last-mine-unknown.md after reading"
 echo "  OK"
 
 # [54] noise filter: skip patterns excluded from extraction
@@ -475,6 +475,17 @@ for item in all_items:
     assert '把握しました' not in item, f'noise found: {item}'
 " <<< "$JSON" || fail "[54] noise items should not appear in extracted output"
 rm -f "$NOISE_FILE"
+echo "  OK"
+
+# [55] E2E pipeline: mine with session_id → recall → file deleted
+echo "[55] E2E pipeline: mine with session_id → recall → file deleted"
+E2E_SID="e2esid"
+rm -f "$ORES_TMPDIR/.last-mine-${E2E_SID}.md"
+echo '{"hook_event_name": "PreCompact", "transcript_path": "'"$FIXTURES"'/projects/test-project/session1.jsonl", "session_id": "'"$E2E_SID"'", "cwd": "/x/y/test-project"}' | "${PICKEL_CMD[@]}" mine 2>/dev/null
+[ -f "$ORES_TMPDIR/.last-mine-${E2E_SID}.md" ] || fail "[55] mine should create .last-mine-${E2E_SID}.md"
+OUT=$(echo '{"source": "compact", "session_id": "'"$E2E_SID"'"}' | "${PICKEL_CMD[@]}" recall 2>/dev/null)
+[ -n "$OUT" ] || fail "[55] recall should output meaningful content"
+[ ! -f "$ORES_TMPDIR/.last-mine-${E2E_SID}.md" ] || fail "[55] recall should delete .last-mine-${E2E_SID}.md"
 echo "  OK"
 
 echo ""
