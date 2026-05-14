@@ -94,6 +94,19 @@ def _safe_int(val: object) -> int:
     return 0
 
 
+_SAFE_SESSION_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _safe_session_id(sid: object) -> str:
+    """Sanitize session_id for safe use in file names."""
+    if not isinstance(sid, str):
+        return "unknown"
+    if ".." in sid:
+        return "unknown"
+    cleaned = _SAFE_SESSION_ID_RE.sub("", sid)[:64]
+    return cleaned or "unknown"
+
+
 # ── Data Dir ─────────────────────────────────────────────────────
 
 
@@ -395,7 +408,7 @@ _MINE_ERROR_RE = re.compile(
 _MINE_CORRECTION_RE_LIST = [
     re.compile(r"違う"),
     re.compile(r"^ちょっと待って", re.MULTILINE),
-    re.compile(r"だめ[だよね。！]|ダメ[だよね。！]"),
+    re.compile(r"[だダ][めメ](?:[だよね。！]|です|かな)|[だダ][めメ]$", re.MULTILINE),
     re.compile(r"\bwrong\b", re.IGNORECASE),
     re.compile(r"\bwait\b", re.IGNORECASE),
     re.compile(r"^no\b", re.IGNORECASE | re.MULTILINE),
@@ -1520,7 +1533,7 @@ def cmd_recall(args) -> None:
     source = stdin_data.get("source", "")
 
     if source == "compact":
-        session_id = (stdin_data.get("session_id", "") or "").strip() or "unknown"
+        session_id = _safe_session_id(stdin_data.get("session_id", ""))
         mine_dir = get_ores_dir()
         mine_file = mine_dir / f".last-mine-{session_id}.md"
         consuming_file = mine_dir / f".consuming-{session_id}.md"
@@ -1933,16 +1946,30 @@ def _mine_print_dry_run(extracted: dict, transcript_path: "Optional[Path]") -> N
 
 def _mine_empty_hook_output(session_id: str = "unknown") -> None:
     """Write empty .last-mine-{session_id}.md and return silently (hook mode)."""
-    sid = session_id or "unknown"
+    sid = _safe_session_id(session_id)
+    tmp_path: "Optional[str]" = None
     try:
         mine_dir = get_ores_dir()
         mine_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(mine_dir, 0o700)
         mine_file = mine_dir / f".last-mine-{sid}.md"
-        mine_file.write_text("", encoding="utf-8")
-        os.chmod(mine_file, 0o600)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=mine_dir,
+            delete=False,
+            suffix=".tmp",
+        ) as f:
+            f.write("")
+            tmp_path = f.name
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, str(mine_file))
     except OSError:
-        pass
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def cmd_mine(args) -> None:
@@ -1976,9 +2003,7 @@ def cmd_mine(args) -> None:
                             resolved.relative_to(projects_dir)
                         except ValueError:
                             _warn(f"transcript_path outside projects dir: {tp}")
-                            _sid = (
-                                stdin_data.get("session_id", "") or ""
-                            ).strip() or "unknown"
+                            _sid = _safe_session_id(stdin_data.get("session_id", ""))
                             _mine_empty_hook_output(_sid)
                             return
                         transcript_path = resolved
@@ -1995,7 +2020,7 @@ def cmd_mine(args) -> None:
     if transcript_path is None:
         if is_hook_mode:
             # Hook invocation without transcript — return empty context
-            _sid = (stdin_data.get("session_id", "") or "").strip() or "unknown"
+            _sid = _safe_session_id(stdin_data.get("session_id", ""))
             _mine_empty_hook_output(_sid)
             return
         else:
@@ -2020,7 +2045,7 @@ def cmd_mine(args) -> None:
             mine_dir = get_ores_dir()
             mine_dir.mkdir(parents=True, exist_ok=True)
             os.chmod(mine_dir, 0o700)
-            sid = (stdin_data.get("session_id", "") or "").strip() or "unknown"
+            sid = _safe_session_id(stdin_data.get("session_id", ""))
             mine_file = mine_dir / f".last-mine-{sid}.md"
             with tempfile.NamedTemporaryFile(
                 mode="w",

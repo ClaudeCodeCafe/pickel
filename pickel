@@ -95,6 +95,19 @@ def _safe_int(val: object) -> int:
     return 0
 
 
+_SAFE_SESSION_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _safe_session_id(sid: object) -> str:
+    """Sanitize session_id for safe use in file names."""
+    if not isinstance(sid, str):
+        return "unknown"
+    if ".." in sid:
+        return "unknown"
+    cleaned = _SAFE_SESSION_ID_RE.sub("", sid)[:64]
+    return cleaned or "unknown"
+
+
 # ── Data Dir ─────────────────────────────────────────────────────
 
 
