@@ -37,7 +37,7 @@ echo "=== pickel smoke tests ==="
 # ── Basic ────────────────────────────────────────────────────────
 
 echo "[1] --version"
-"${PICKEL_CMD[@]}" --version | grep -q "1.0.0"
+"${PICKEL_CMD[@]}" --version | grep -q "1.0.1"
 echo "  OK"
 
 echo "[2] --help"

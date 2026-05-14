@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Mine your Claude Code conversation logs. Zero-dependency Python CLI for searching past sessions.",
-    "version": "1.0.0"
+    "version": "1.0.1"
   },
   "plugins": [
     {
       "name": "pickel",
       "source": "./",
       "description": "Search past Claude Code sessions, list projects, show last session summaries, and estimate token costs. Includes /search, /last, /cost commands and auto-detection skill.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": {
         "name": "ClaudeCodeCafe"
       },
