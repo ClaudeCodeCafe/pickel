@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 # ── Color ────────────────────────────────────────────────────────
 
@@ -111,7 +111,7 @@ def _sanitize_project_name(name: str) -> "Optional[str]":
     Rejects names containing slashes, backslashes, parent-directory
     references (``..``), or leading dots.
     """
-    if not name or '/' in name or '\\' in name or '..' in name or name.startswith('.'):
+    if not name or "/" in name or "\\" in name or ".." in name or name.startswith("."):
         return None
     return name
 
@@ -125,10 +125,10 @@ def _project_name_from_cwd(cwd: str) -> "Optional[str]":
         return None
     # GitHub / ghq structure: parent = org name
     parent = p.parent.name
-    if parent and parent not in ('', '.', 'src', 'home', 'Users'):
+    if parent and parent not in ("", ".", "src", "home", "Users"):
         # ghq structure: github.com/org/repo -> org-repo
         grandparent = p.parent.parent.name
-        if grandparent in ('github.com', 'gitlab.com', 'bitbucket.org'):
+        if grandparent in ("github.com", "gitlab.com", "bitbucket.org"):
             result = f"{parent}-{name}"
             return _sanitize_project_name(result) and result or None
     return _sanitize_project_name(name) and name or None
@@ -380,7 +380,7 @@ _MINE_DECISION_ASST_RE = re.compile(
     re.IGNORECASE,
 )
 _MINE_DISCOVERY_RE = re.compile(
-    r"わかった|発見|\bfound\b|turns out|原因は|\bfix(?:ed)?\b|\bsolved\b|直った",
+    r"わかった|発見|turns out|原因は|\bfix(?:ed)?\b|\bsolved\b|直った",
     re.IGNORECASE,
 )
 _MINE_UNFINISHED_RE = re.compile(
@@ -388,16 +388,36 @@ _MINE_UNFINISHED_RE = re.compile(
     re.IGNORECASE,
 )
 _MINE_ERROR_RE = re.compile(
-    r"\b404\b|\berror:?\b|\bfailed\b|\bbug\b|\bexception\b",
+    r"\berror:?\b|\bfailed\b|\bbug\b|\bexception\b",
     re.IGNORECASE,
 )
 _MINE_CORRECTION_RE_LIST = [
     re.compile(r"違う"),
-    re.compile(r"ちょっと待って"),
-    re.compile(r"だめ"),
+    re.compile(r"^ちょっと待って", re.MULTILINE),
+    re.compile(r"だめ[だよね。！]"),
     re.compile(r"\bwrong\b", re.IGNORECASE),
     re.compile(r"\bwait\b", re.IGNORECASE),
     re.compile(r"^no\b", re.IGNORECASE | re.MULTILINE),
+]
+
+_MINE_SKIP_PATTERNS = [
+    re.compile(r"^This session is being continued from a previous conversation"),
+    re.compile(r"^Exit code \d+$"),
+    re.compile(r"^The user doesn't want to proceed"),
+    re.compile(r"^No scheduled jobs\.$"),
+    re.compile(r"^\d+\t"),
+    re.compile(r"PNG image data,"),
+    re.compile(r"^Saved working directory and index state"),
+]
+
+_MINE_SKIP_FIRST_LINE = [
+    re.compile(r"^把握しました"),
+    re.compile(r"^了解しました"),
+    re.compile(r"^了解！"),
+    re.compile(r"^完了！"),
+    re.compile(r"^ちゃんと書いてありました"),
+    re.compile(r"^おお、これ"),
+    re.compile(r"^整理しますね"),
 ]
 
 
@@ -1299,7 +1319,9 @@ def _calculate_session_cost(transcript_path: "Optional[Path]") -> "Optional[str]
                 + _safe_int(usage.get("cache_read_input_tokens", 0))
             )
             model_usage[model]["input_tokens"] += input_total
-            model_usage[model]["output_tokens"] += _safe_int(usage.get("output_tokens", 0))
+            model_usage[model]["output_tokens"] += _safe_int(
+                usage.get("output_tokens", 0)
+            )
 
     if not model_usage:
         return None
@@ -1323,7 +1345,9 @@ def _calculate_session_cost(transcript_path: "Optional[Path]") -> "Optional[str]
             rate_key = "haiku"
         if rate_key:
             rates = cost_rates[rate_key]
-            cost = (inp / 1_000_000 * rates["input"]) + (out / 1_000_000 * rates["output"])
+            cost = (inp / 1_000_000 * rates["input"]) + (
+                out / 1_000_000 * rates["output"]
+            )
             total_cost += cost
             model_costs.append((model, cost, tokens))
 
@@ -1360,7 +1384,8 @@ def _ore_build_content(
 ) -> str:
     """Build ore markdown from extracted context. Returns empty string if no content."""
     has_content = any(
-        extracted.get(k) for k in ("decisions", "discoveries", "errors_fixes", "unfinished")
+        extracted.get(k)
+        for k in ("decisions", "discoveries", "errors_fixes", "unfinished")
     )
     if not has_content and not cost_str:
         return ""
@@ -1465,7 +1490,9 @@ def cmd_wrap(args) -> None:
         return
 
     cost_str = _calculate_session_cost(transcript_path)
-    content = _ore_build_content(extracted, session_id, project_name, cost_str, "session-end")
+    content = _ore_build_content(
+        extracted, session_id, project_name, cost_str, "session-end"
+    )
 
     if content.strip():
         _ore_save(project_name, session_id or "unknown", content)
@@ -1490,6 +1517,24 @@ def cmd_recall(args) -> None:
             pass
 
     source = stdin_data.get("source", "")
+
+    if source == "compact":
+        mine_file = get_ores_dir() / ".last-mine.md"
+        if mine_file.is_file():
+            try:
+                content = mine_file.read_text(encoding="utf-8")
+                if len(content) > _RECALL_MAX:
+                    content = content[: _RECALL_MAX - 3] + "..."
+                if (
+                    content.strip()
+                    and content.strip() != "No significant context extracted."
+                ):
+                    print(content)
+                mine_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return
+
     if source and source != "startup":
         return
 
@@ -1605,7 +1650,10 @@ def _ores_list(ores_base: Path, project_filter: "Optional[str]", as_json: bool) 
             for proj_dir in sorted(ores_base.iterdir()):
                 if not proj_dir.is_dir():
                     continue
-                if project_filter and project_filter.lower() not in proj_dir.name.lower():
+                if (
+                    project_filter
+                    and project_filter.lower() not in proj_dir.name.lower()
+                ):
                     continue
                 try:
                     ore_files = sorted(
@@ -1677,7 +1725,9 @@ def _mine_find_fallback_session(
     project_name = getattr(args, "project", None)
     if project_name:
         # Prefer exact match, then partial match
-        exact = [(k, v) for k, v in projects.items() if project_name.lower() == k.lower()]
+        exact = [
+            (k, v) for k, v in projects.items() if project_name.lower() == k.lower()
+        ]
         if exact:
             sessions = find_sessions(exact[0][1])
             return sessions[0] if sessions else None
@@ -1781,6 +1831,13 @@ def _mine_extract_context(transcript_path: "Optional[Path]") -> dict:
 
             first_line = text.strip().split("\n")[0][:200]
 
+            if any(p.search(first_line) for p in _MINE_SKIP_PATTERNS):
+                continue
+            if etype == "assistant" and any(
+                p.search(first_line) for p in _MINE_SKIP_FIRST_LINE
+            ):
+                continue
+
             if etype == "user":
                 last_user_text = text.strip()
                 if _MINE_DECISION_USER_RE.search(text):
@@ -1799,7 +1856,7 @@ def _mine_extract_context(transcript_path: "Optional[Path]") -> dict:
             if _MINE_ERROR_RE.search(text):
                 errors_fixes_add(first_line)
 
-            if _MINE_UNFINISHED_RE.search(text):
+            if etype == "user" and _MINE_UNFINISHED_RE.search(text):
                 unfinished_add(first_line)
 
     if last_user_text:
@@ -1865,16 +1922,16 @@ def _mine_print_dry_run(extracted: dict, transcript_path: "Optional[Path]") -> N
 
 
 def _mine_empty_hook_output() -> None:
-    """Print empty context as hook output and return."""
-    extracted = {"decisions": [], "discoveries": [], "errors_fixes": [], "unfinished": []}
-    context_text = _mine_format_context(extracted)
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreCompact",
-            "additionalContext": context_text,
-        }
-    }
-    print(json.dumps(output, ensure_ascii=False))
+    """Write empty .last-mine.md and return silently (hook mode)."""
+    try:
+        mine_dir = get_ores_dir()
+        mine_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(mine_dir, 0o700)
+        mine_file = mine_dir / ".last-mine.md"
+        mine_file.write_text("", encoding="utf-8")
+        os.chmod(mine_file, 0o600)
+    except OSError:
+        pass
 
 
 def cmd_mine(args) -> None:
@@ -1941,13 +1998,19 @@ def cmd_mine(args) -> None:
         return
 
     context_text = _mine_format_context(extracted)
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreCompact",
-            "additionalContext": context_text,
-        }
-    }
-    print(json.dumps(output, ensure_ascii=False))
+
+    if is_hook_mode:
+        try:
+            mine_dir = get_ores_dir()
+            mine_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(mine_dir, 0o700)
+            mine_file = mine_dir / ".last-mine.md"
+            mine_file.write_text(context_text, encoding="utf-8")
+            os.chmod(mine_file, 0o600)
+        except OSError:
+            pass
+    else:
+        print(context_text)
 
     # Side-effect: persist ore (best-effort, failures are silently ignored)
     try:

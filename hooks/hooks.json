@@ -22,6 +22,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/pickel\" recall",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionEnd": [

@@ -41,7 +41,7 @@ echo "=== pickel smoke tests ==="
 # ── Basic ────────────────────────────────────────────────────────
 
 echo "[1] --version"
-"${PICKEL_CMD[@]}" --version | grep -q "0.6.0"
+"${PICKEL_CMD[@]}" --version | grep -q "0.6.1"
 echo "  OK"
 
 echo "[2] --help"
@@ -353,17 +353,9 @@ for key in ('decisions', 'discoveries', 'errors_fixes', 'unfinished'):
 " <<< "$JSON"
 echo "  OK"
 
-echo "[38] mine hook output format"
-JSON=$(echo '{}' | "${PICKEL_CMD[@]}" mine)
-"$PYTHON" -c "
-import json, sys
-data = json.loads(sys.stdin.read())
-assert 'hookSpecificOutput' in data, 'missing hookSpecificOutput'
-hso = data['hookSpecificOutput']
-assert hso.get('hookEventName') == 'PreCompact', 'wrong hookEventName'
-assert 'additionalContext' in hso, 'missing additionalContext'
-assert isinstance(hso['additionalContext'], str), 'additionalContext should be str'
-" <<< "$JSON"
+echo "[38] mine CLI mode outputs plain text (not JSON hookSpecificOutput)"
+OUT=$(echo '{}' | "${PICKEL_CMD[@]}" mine)
+echo "$OUT" | grep -qv "hookSpecificOutput" || fail "[38] CLI mode should not output hookSpecificOutput"
 echo "  OK"
 
 # [39] mine with invalid JSON stdin
@@ -384,10 +376,11 @@ EC=0
 "${PICKEL_CMD[@]}" mine --transcript /nonexistent/path.jsonl 2>/dev/null || EC=$?
 check_exit_code "$EC" 1 "[41] mine --transcript missing file exits 1"
 
-# [42] mine hook output contains additionalContext
-echo "[42] mine hook output contains additionalContext"
-OUTPUT=$(echo '{}' | "${PICKEL_CMD[@]}" mine 2>/dev/null)
-echo "$OUTPUT" | grep -q "additionalContext" || fail "[42] mine output should contain additionalContext"
+# [42] mine hook mode saves .last-mine.md
+echo "[42] mine hook mode saves .last-mine.md"
+rm -f "$ORES_TMPDIR/.last-mine.md"
+echo '{"hook_event_name": "PreCompact"}' | "${PICKEL_CMD[@]}" mine 2>/dev/null
+[ -f "$ORES_TMPDIR/.last-mine.md" ] || fail "[42] mine should save .last-mine.md in hook mode"
 echo "  OK"
 
 # [43] mine --post removed (should fail)
@@ -438,6 +431,51 @@ echo "[50] recall with empty stdin exits 0"
 EC=0
 echo '{}' | "${PICKEL_CMD[@]}" recall 2>/dev/null || EC=$?
 check_exit_code "$EC" 0 "[50] recall with empty stdin exits 0"
+
+# ── mine → recall pipeline ────────────────────────────────────────
+
+# [51] mine hook mode: empty stdout, .last-mine.md created
+echo "[51] mine hook mode: empty stdout, .last-mine.md created"
+rm -f "$ORES_TMPDIR/.last-mine.md"
+OUT=$(echo '{"hook_event_name": "PreCompact", "transcript_path": "'"$FIXTURES"'/projects/test-project/session1.jsonl", "session_id": "s1", "cwd": "/x/y/test-project"}' | "${PICKEL_CMD[@]}" mine 2>/dev/null)
+[ -z "$OUT" ] || fail "[51] mine hook mode should output nothing to stdout"
+[ -f "$ORES_TMPDIR/.last-mine.md" ] || fail "[51] mine should save .last-mine.md"
+echo "  OK"
+
+# [52] recall compact source reads .last-mine.md
+echo "[52] recall compact source reads .last-mine.md"
+printf '# Rescued Context\nsome important note\n' > "$ORES_TMPDIR/.last-mine.md"
+OUT=$(echo '{"source": "compact"}' | "${PICKEL_CMD[@]}" recall)
+echo "$OUT" | grep -q "Rescued Context" || fail "[52] recall should output .last-mine.md content"
+echo "  OK"
+
+# [53] mine → recall pipeline: .last-mine.md deleted after recall
+echo "[53] mine → recall pipeline: .last-mine.md deleted after recall"
+rm -f "$ORES_TMPDIR/.last-mine.md"
+echo '{"hook_event_name": "PreCompact"}' | "${PICKEL_CMD[@]}" mine 2>/dev/null
+[ -f "$ORES_TMPDIR/.last-mine.md" ] || fail "[53] mine should create .last-mine.md"
+echo '{"source": "compact"}' | "${PICKEL_CMD[@]}" recall 2>/dev/null
+[ ! -f "$ORES_TMPDIR/.last-mine.md" ] || fail "[53] recall should delete .last-mine.md after reading"
+echo "  OK"
+
+# [54] noise filter: skip patterns excluded from extraction
+echo "[54] noise filter: skip patterns excluded from extraction"
+NOISE_FILE=$(mktemp /tmp/pickel-noise-XXXX.jsonl)
+printf '{"type":"user","timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"Exit code 1"}}\n' > "$NOISE_FILE"
+printf '{"type":"user","timestamp":"2025-01-01T00:00:02Z","message":{"role":"user","content":"This session is being continued from a previous conversation due to length."}}\n' >> "$NOISE_FILE"
+printf '{"type":"assistant","timestamp":"2025-01-01T00:00:03Z","message":{"role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"把握しました。進めます。"}],"usage":{"input_tokens":10,"output_tokens":5}}}\n' >> "$NOISE_FILE"
+JSON=$("${PICKEL_CMD[@]}" mine --json --transcript "$NOISE_FILE")
+"$PYTHON" -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+all_items = data['decisions'] + data['discoveries'] + data['errors_fixes'] + data['unfinished']
+for item in all_items:
+    assert 'Exit code' not in item, f'noise found: {item}'
+    assert 'This session is being continued' not in item, f'noise found: {item}'
+    assert '把握しました' not in item, f'noise found: {item}'
+" <<< "$JSON" || fail "[54] noise items should not appear in extracted output"
+rm -f "$NOISE_FILE"
+echo "  OK"
 
 echo ""
 echo "=== All smoke tests passed ==="
