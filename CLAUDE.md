@@ -19,4 +19,4 @@ pip install ruff   # required for lint / format
   - `pickel` (standalone script, synced from cli.py)
   - `.claude-plugin/plugin.json` (`version`)
   - `.claude-plugin/marketplace.json` (`metadata.version` + `plugins[0].version`)
-- Do NOT include `Co-Authored-By: Claude` in commit messages
+- Include `Co-Authored-By: Claude <noreply@anthropic.com>` in commit messages
