@@ -74,7 +74,6 @@ pickel search "retry logic"
 | `errors` | ユーザーの修正指示と API エラーを抽出 |
 | `tools` | ツール使用頻度を表示 |
 | `cost` | モデル別トークンコスト推定 |
-| `mine` | コンパクト時にコンテキストを自動採掘（PreCompact hook） |
 
 ### 検索オプション
 
@@ -96,7 +95,7 @@ pickel search "retry logic"
 
 ### コマンド共通オプション
 
-`--json` は全サブコマンド（`search`, `projects`, `last`, `context`, `chat`, `errors`, `tools`, `cost`, `mine`）で利用可能。
+`--json` は全サブコマンド（`search`, `projects`, `last`, `context`, `chat`, `errors`, `tools`, `cost`）で利用可能。
 
 ### 使用例
 
@@ -183,26 +182,6 @@ pickel は Claude Code マーケットプレイスプラグインとして利用
 | `/pickel:last [project]` | プロジェクトの最新セッションを表示 |
 | `/pickel:cost` | トークンコスト推定 |
 | `/pickel:setup` | プラグインの準備状態を確認 |
-
-### Hook: コンテキスト自動採掘
-
-pickel は Claude Code が会話をコンパクトする際、重要なコンテキストを自動で保持します。設定不要 — プラグインをインストールするだけ。
-
-コンパクト時に `PreCompact` hook が以下を抽出します:
-
-- **Decisions** — セッション中に決定したこと
-- **Discoveries** — 学んだこと、発見したこと
-- **Errors & Fixes** — 遭遇した問題とその解決方法
-- **Unfinished** — 進行中だったタスク
-
-抽出されたコンテキストはコンパクト後の会話に注入されるため、Claude が文脈を見失いません。
-
-手動で実行することもできます:
-
-```bash
-pickel mine --dry-run                          # 抽出内容をプレビュー
-pickel mine --transcript path/to/session.jsonl  # 特定のセッションから抽出
-```
 
 ### スキル: 会話マイニング
 
