@@ -1,3 +1,5 @@
+[English](README.md) | [日本語](README.ja.md)
+
 # pickel
 
 A pickaxe for mining Claude Code conversation logs.

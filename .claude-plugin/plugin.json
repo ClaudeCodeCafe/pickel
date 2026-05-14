@@ -1,7 +1,7 @@
 {
   "name": "pickel",
   "description": "Mine your Claude Code conversation logs. Search past sessions, list projects, check costs, and surface what you built before.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": {
     "name": "ClaudeCodeCafe"
   },
