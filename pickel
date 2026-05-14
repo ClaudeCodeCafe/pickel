@@ -13,7 +13,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator
 
 __version__ = "1.0.0"
 
@@ -100,35 +100,6 @@ def _safe_int(val: object) -> int:
 def get_projects_dir() -> Path:
     config = os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))
     return Path(config) / "projects"
-
-
-def _sanitize_project_name(name: str) -> "Optional[str]":
-    """Validate a project name to prevent path traversal.
-
-    Rejects names containing slashes, backslashes, parent-directory
-    references (``..``), or leading dots.
-    """
-    if not name or "/" in name or "\\" in name or ".." in name or name.startswith("."):
-        return None
-    return name
-
-
-def _project_name_from_cwd(cwd: str) -> "Optional[str]":
-    if not cwd:
-        return None
-    p = Path(cwd)
-    name = p.name
-    if not name:
-        return None
-    # GitHub / ghq structure: parent = org name
-    parent = p.parent.name
-    if parent and parent not in ("", ".", "src", "home", "Users"):
-        # ghq structure: github.com/org/repo -> org-repo
-        grandparent = p.parent.parent.name
-        if grandparent in ("github.com", "gitlab.com", "bitbucket.org"):
-            result = f"{parent}-{name}"
-            return _sanitize_project_name(result) and result or None
-    return _sanitize_project_name(name) and name or None
 
 
 # Directories to exclude from project listing
@@ -258,25 +229,6 @@ def _today_str() -> str:
 
 def _this_month_str() -> str:
     return datetime.now().strftime("%Y-%m")
-
-
-def _format_age(seconds: float) -> str:
-    if seconds < 60:
-        return "just now"
-    if seconds < 3600:
-        return f"{int(seconds / 60)}m ago"
-    if seconds < 86400:
-        return f"{int(seconds / 3600)}h ago"
-    return f"{int(seconds / 86400)}d ago"
-
-
-def _format_size(nbytes: int) -> str:
-    if nbytes < 1024:
-        return f"{nbytes}B"
-    kb = nbytes / 1024
-    if kb < 1024:
-        return f"{kb:.1f}K"
-    return f"{kb / 1024:.1f}M"
 
 
 def _validate_date(date_str: str) -> str:
@@ -1235,7 +1187,7 @@ def cmd_cost(args):
         f"{bold(f'${total_cost:.2f}'):>10}"
     )
     if uncosted:
-        uncosted_str = ", ".join(uncosted)
+        uncosted_str = ", ".join(_sanitize(m) for m in uncosted)
         print(f"\n  {dim('Uncosted models: ' + uncosted_str)}")
     print(
         f"\n  {dim('Rates: opus $15/$75, sonnet $3/$15, haiku $0.25/$1.25 per 1M tokens')}"
