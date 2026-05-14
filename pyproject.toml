@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pickel-cli"
-version = "0.4.0"
+version = "0.5.0"
 description = "A pickaxe for mining Claude Code conversation logs"
 readme = "README.md"
 license = "MIT"

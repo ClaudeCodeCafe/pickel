@@ -1,0 +1,16 @@
+{
+  "description": "pickel mine — Auto-rescue context on compact",
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/pickel\" mine"
+          }
+        ]
+      }
+    ]
+  }
+}

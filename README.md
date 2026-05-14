@@ -73,6 +73,7 @@ pickel search "retry logic"
 | `errors` | Extract user corrections and API errors |
 | `tools` | Show tool usage frequency |
 | `cost` | Estimate token costs by model |
+| `mine` | Auto-rescue context on compact (PreCompact hook) |
 
 ### Search Options
 
@@ -94,7 +95,7 @@ pickel search "retry logic"
 
 ### Per-Command Options
 
-`--json` is available on all subcommands (`search`, `projects`, `last`, `context`, `chat`, `errors`, `tools`, `cost`).
+`--json` is available on all subcommands (`search`, `projects`, `last`, `context`, `chat`, `errors`, `tools`, `cost`, `mine`).
 
 ### Examples
 
@@ -182,6 +183,26 @@ Install via the Claude Code marketplace, or add it directly to your project:
 | `/pickel:last [project]` | Show the last session for a project |
 | `/pickel:cost` | Estimate token costs |
 | `/pickel:setup` | Check plugin readiness |
+
+### Hook: Auto Context Rescue
+
+pickel automatically preserves important context when Claude Code compacts your conversation. No configuration needed — just install the plugin.
+
+When a conversation is compacted, the `PreCompact` hook extracts:
+
+- **Decisions** — what was decided during the session
+- **Discoveries** — what was learned or found
+- **Errors & Fixes** — problems encountered and how they were solved
+- **Unfinished** — tasks that were in progress
+
+The extracted context is injected back into the compacted conversation, so Claude doesn't lose track of what happened.
+
+You can also run it manually:
+
+```bash
+pickel mine --dry-run                          # preview what would be extracted
+pickel mine --transcript path/to/session.jsonl  # extract from a specific session
+```
 
 ### Skill: Conversation Mining
 

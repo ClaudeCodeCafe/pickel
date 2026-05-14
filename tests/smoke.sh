@@ -17,12 +17,27 @@ fi
 
 export CLAUDE_CONFIG_DIR="$FIXTURES"
 
+fail() {
+    echo "  FAIL: $1"
+    exit 1
+}
+
+check_exit_code() {
+    local actual=$1
+    local expected=$2
+    local label=$3
+    if [ "$actual" -ne "$expected" ]; then
+        fail "$label (expected exit $expected, got $actual)"
+    fi
+    echo "  OK"
+}
+
 echo "=== pickel smoke tests ==="
 
 # ── Basic ────────────────────────────────────────────────────────
 
 echo "[1] --version"
-"${PICKEL_CMD[@]}" --version | grep -q "0.3.2"
+"${PICKEL_CMD[@]}" --version | grep -q "0.5.0"
 echo "  OK"
 
 echo "[2] --help"
@@ -316,6 +331,66 @@ if [ "$EXIT_CODE" -ne 0 ]; then
 fi
 echo "$OUT" | grep -q "invalid JSON\|expected object\|hello"
 echo "  OK"
+
+# ── Mine ─────────────────────────────────────────────────────────
+
+echo "[36] mine --dry-run (empty stdin)"
+echo '{}' | "${PICKEL_CMD[@]}" mine --dry-run >/dev/null
+echo "  OK"
+
+echo "[37] mine --json (empty stdin)"
+JSON=$(echo '{}' | "${PICKEL_CMD[@]}" mine --json)
+"$PYTHON" -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+for key in ('decisions', 'discoveries', 'errors_fixes', 'unfinished'):
+    assert key in data, f'missing key: {key}'
+    assert isinstance(data[key], list), f'{key} should be list'
+" <<< "$JSON"
+echo "  OK"
+
+echo "[38] mine hook output format"
+JSON=$(echo '{}' | "${PICKEL_CMD[@]}" mine)
+"$PYTHON" -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+assert 'hookSpecificOutput' in data, 'missing hookSpecificOutput'
+hso = data['hookSpecificOutput']
+assert hso.get('hookEventName') == 'PreCompact', 'wrong hookEventName'
+assert 'additionalContext' in hso, 'missing additionalContext'
+assert isinstance(hso['additionalContext'], str), 'additionalContext should be str'
+" <<< "$JSON"
+echo "  OK"
+
+# [39] mine with invalid JSON stdin
+echo "[39] mine with invalid JSON stdin"
+EC=0
+echo 'not json' | "${PICKEL_CMD[@]}" mine 2>/dev/null || EC=$?
+check_exit_code "$EC" 0 "[39] mine with invalid stdin returns 0"
+
+# [40] mine with array stdin (not object)
+echo "[40] mine with array stdin"
+EC=0
+echo '[]' | "${PICKEL_CMD[@]}" mine 2>/dev/null || EC=$?
+check_exit_code "$EC" 0 "[40] mine with array stdin returns 0"
+
+# [41] mine --transcript with missing file
+echo "[41] mine --transcript with missing file"
+EC=0
+"${PICKEL_CMD[@]}" mine --transcript /nonexistent/path.jsonl 2>/dev/null || EC=$?
+check_exit_code "$EC" 1 "[41] mine --transcript missing file exits 1"
+
+# [42] mine hook output contains additionalContext
+echo "[42] mine hook output contains additionalContext"
+OUTPUT=$(echo '{}' | "${PICKEL_CMD[@]}" mine 2>/dev/null)
+echo "$OUTPUT" | grep -q "additionalContext" || fail "[42] mine output should contain additionalContext"
+echo "  OK"
+
+# [43] mine --post removed (should fail)
+echo "[43] mine --post should not exist"
+EC=0
+"${PICKEL_CMD[@]}" mine --post 2>/dev/null || EC=$?
+check_exit_code "$EC" 2 "[43] mine --post should not exist"
 
 echo ""
 echo "=== All smoke tests passed ==="

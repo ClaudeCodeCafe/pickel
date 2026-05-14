@@ -13,9 +13,9 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # ── Color ────────────────────────────────────────────────────────
 
@@ -314,6 +314,40 @@ def extract_text(entry: dict) -> str | None:
                         parts.append(sub[:200])
         return "\n".join(parts) if parts else None
     return None
+
+
+# ── Mine: constants ──────────────────────────────────────────────
+
+_MINE_MAX_CONTEXT = 10_000
+
+_MINE_DECISION_USER_RE = re.compile(
+    r"に決めた|でいこう|で確定|let'?s go with|decided",
+    re.IGNORECASE,
+)
+_MINE_DECISION_ASST_RE = re.compile(
+    r"確定しました|に決まりました|に決定しました|we decided|we'll use|settled on|chosen|going with",
+    re.IGNORECASE,
+)
+_MINE_DISCOVERY_RE = re.compile(
+    r"わかった|発見|\bfound\b|turns out|原因は|\bfix(?:ed)?\b|\bsolved\b|直った",
+    re.IGNORECASE,
+)
+_MINE_UNFINISHED_RE = re.compile(
+    r"次は|\bTODO\b|後で|残課題|next step|\blater\b|やること|あとで",
+    re.IGNORECASE,
+)
+_MINE_ERROR_RE = re.compile(
+    r"\b404\b|\berror:?\b|\bfailed\b|\bbug\b|\bexception\b",
+    re.IGNORECASE,
+)
+_MINE_CORRECTION_RE_LIST = [
+    re.compile(r"違う"),
+    re.compile(r"ちょっと待って"),
+    re.compile(r"だめ"),
+    re.compile(r"\bwrong\b", re.IGNORECASE),
+    re.compile(r"\bwait\b", re.IGNORECASE),
+    re.compile(r"^no\b", re.IGNORECASE | re.MULTILINE),
+]
 
 
 # ── Commands ─────────────────────────────────────────────────────
@@ -866,16 +900,6 @@ def cmd_errors(args):
             )
             sys.exit(1)
 
-    # Patterns for user correction messages
-    correction_patterns = [
-        re.compile(r"違う", re.IGNORECASE),
-        re.compile(r"ちょっと待って", re.IGNORECASE),
-        re.compile(r"だめ", re.IGNORECASE),
-        re.compile(r"\bwrong\b", re.IGNORECASE),
-        re.compile(r"\bwait\b", re.IGNORECASE),
-        re.compile(r"^no\b", re.IGNORECASE | re.MULTILINE),
-    ]
-
     results = []
 
     for proj_name, proj_dir in target_projects:
@@ -889,7 +913,7 @@ def cmd_errors(args):
                 if etype == "user":
                     text = extract_text(entry)
                     if text:
-                        for pat in correction_patterns:
+                        for pat in _MINE_CORRECTION_RE_LIST:
                             if pat.search(text):
                                 first_line = text.strip().split("\n")[0][:200]
                                 results.append(
@@ -1195,6 +1219,291 @@ def cmd_cost(args):
     print()
 
 
+# ── Mine: helpers ────────────────────────────────────────────────
+
+
+def _mine_find_fallback_session(
+    args: "argparse.Namespace", stdin_data: dict
+) -> "Optional[Path]":
+    base = get_projects_dir()
+    projects = find_projects(base)
+
+    project_name = getattr(args, "project", None)
+    if project_name:
+        # Prefer exact match, then partial match
+        exact = [(k, v) for k, v in projects.items() if project_name.lower() == k.lower()]
+        if exact:
+            sessions = find_sessions(exact[0][1])
+            return sessions[0] if sessions else None
+        matches = [
+            (k, v) for k, v in projects.items() if project_name.lower() in k.lower()
+        ]
+        if len(matches) == 1:
+            sessions = find_sessions(matches[0][1])
+            return sessions[0] if sessions else None
+        if len(matches) > 1:
+            candidates = ", ".join(k for k, _ in matches)
+            print(
+                f"pickel: ambiguous -p '{project_name}': {candidates}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return None
+
+    cwd = stdin_data.get("cwd", "")
+    if isinstance(cwd, str) and cwd:
+        repo_name = Path(cwd).name
+        if repo_name:
+            for _proj_name, proj_dir in projects.items():
+                if normalize_project_name(proj_dir.name) == repo_name:
+                    sessions = find_sessions(proj_dir)
+                    if sessions:
+                        return sessions[0]
+
+    best: "Optional[tuple[float, Path]]" = None
+    for _proj_name, proj_dir in projects.items():
+        sessions = find_sessions(proj_dir)
+        if sessions:
+            try:
+                mtime = sessions[0].stat().st_mtime
+                if best is None or mtime > best[0]:
+                    best = (mtime, sessions[0])
+            except OSError:
+                pass
+    return best[1] if best else None
+
+
+def _mine_extract_context(transcript_path: "Optional[Path]") -> dict:
+    _MAX_DECISIONS = 20
+    _MAX_DISCOVERIES = 20
+    _MAX_ERRORS_FIXES = 20
+    _MAX_UNFINISHED = 10
+
+    decisions: list = []
+    decisions_seen: set = set()
+    discoveries: list = []
+    discoveries_seen: set = set()
+    errors_fixes: list = []
+    errors_fixes_seen: set = set()
+    unfinished: list = []
+    unfinished_seen: set = set()
+    last_user_text: "Optional[str]" = None
+
+    def decisions_add(item: str) -> None:
+        if len(decisions) < _MAX_DECISIONS and item not in decisions_seen:
+            decisions_seen.add(item)
+            decisions.append(item)
+
+    def discoveries_add(item: str) -> None:
+        if len(discoveries) < _MAX_DISCOVERIES and item not in discoveries_seen:
+            discoveries_seen.add(item)
+            discoveries.append(item)
+
+    def errors_fixes_add(item: str) -> None:
+        if len(errors_fixes) < _MAX_ERRORS_FIXES and item not in errors_fixes_seen:
+            errors_fixes_seen.add(item)
+            errors_fixes.append(item)
+
+    def unfinished_add(item: str) -> None:
+        if len(unfinished) < _MAX_UNFINISHED and item not in unfinished_seen:
+            unfinished_seen.add(item)
+            unfinished.append(item)
+
+    if transcript_path is not None and transcript_path.exists():
+        for entry in iter_messages(transcript_path):
+            etype = entry.get("type", "")
+            if etype not in ("user", "assistant", "system"):
+                continue
+
+            # Handle system entries (API errors)
+            if etype == "system":
+                subtype = entry.get("subtype", "")
+                if subtype == "api_error":
+                    msg = entry.get("message", {})
+                    error_text = ""
+                    if isinstance(msg, dict):
+                        error_text = str(msg.get("error", msg.get("message", "")))[:200]
+                    elif isinstance(msg, str):
+                        error_text = msg[:200]
+                    if error_text:
+                        errors_fixes_add(f"[API Error] {error_text}")
+                continue
+
+            text = extract_text(entry)
+            if not text:
+                continue
+
+            first_line = text.strip().split("\n")[0][:200]
+
+            if etype == "user":
+                last_user_text = text.strip()
+                if _MINE_DECISION_USER_RE.search(text):
+                    decisions_add(first_line)
+                for pat in _MINE_CORRECTION_RE_LIST:
+                    if pat.search(text):
+                        errors_fixes_add(first_line)
+                        break
+            elif etype == "assistant":
+                if _MINE_DECISION_ASST_RE.search(text):
+                    decisions_add(first_line)
+
+            if _MINE_DISCOVERY_RE.search(text):
+                discoveries_add(first_line)
+
+            if _MINE_ERROR_RE.search(text):
+                errors_fixes_add(first_line)
+
+            if _MINE_UNFINISHED_RE.search(text):
+                unfinished_add(first_line)
+
+    if last_user_text:
+        last_line = last_user_text.split("\n")[0][:200]
+        if _MINE_UNFINISHED_RE.search(last_user_text) or len(last_user_text) > 50:
+            tag = f"[Last] {last_line}"
+            if last_line not in unfinished_seen:
+                unfinished_add(tag)
+
+    return {
+        "decisions": decisions,
+        "discoveries": discoveries,
+        "errors_fixes": errors_fixes,
+        "unfinished": unfinished,
+    }
+
+
+def _mine_format_context(extracted: dict) -> str:
+    has_content = any(
+        extracted.get(k)
+        for k in ("decisions", "discoveries", "errors_fixes", "unfinished")
+    )
+    if not has_content:
+        return "No significant context extracted."
+
+    lines = ["# pickel mine — Session Context Rescue", ""]
+    for section, key in [
+        ("Decisions", "decisions"),
+        ("Discoveries", "discoveries"),
+        ("Errors & Fixes", "errors_fixes"),
+        ("Unfinished", "unfinished"),
+    ]:
+        items = extracted.get(key, [])
+        if items:
+            lines.append(f"## {section}")
+            for item in items:
+                lines.append(f"- {item}")
+            lines.append("")
+
+    result = "\n".join(lines)
+    if len(result) > _MINE_MAX_CONTEXT:
+        result = result[: _MINE_MAX_CONTEXT - 3] + "..."
+    return result
+
+
+def _mine_print_dry_run(extracted: dict, transcript_path: "Optional[Path]") -> None:
+    src = str(transcript_path) if transcript_path else "(no transcript)"
+    print(f"  {bold('pickel mine')} — dry run")
+    print(f"  {dim('source:')} {_sanitize(src)}\n")
+    for section, key in [
+        ("Decisions", "decisions"),
+        ("Discoveries", "discoveries"),
+        ("Errors & Fixes", "errors_fixes"),
+        ("Unfinished", "unfinished"),
+    ]:
+        items = extracted.get(key, [])
+        print(f"  {bold(section)} ({len(items)})")
+        for item in items[:5]:
+            print(f"    - {_sanitize(item)}")
+        if len(items) > 5:
+            print(f"    {dim(f'...+{len(items) - 5} more')}")
+        print()
+
+
+def _mine_empty_hook_output() -> None:
+    """Print empty context as hook output and return."""
+    extracted = {"decisions": [], "discoveries": [], "errors_fixes": [], "unfinished": []}
+    context_text = _mine_format_context(extracted)
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreCompact",
+            "additionalContext": context_text,
+        }
+    }
+    print(json.dumps(output, ensure_ascii=False))
+
+
+def cmd_mine(args) -> None:
+    """Extract key context from session (PreCompact hook)."""
+    transcript_path: "Optional[Path]" = None
+    stdin_data: dict = {}
+    is_hook_mode = False
+
+    # Fix 5: --transcript existence check
+    if getattr(args, "transcript", None):
+        transcript_path = Path(args.transcript)
+        if not transcript_path.is_file():
+            print(f"pickel: transcript not found: {transcript_path}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        if not sys.stdin.isatty():
+            try:
+                raw = sys.stdin.read().strip()
+                if raw:
+                    # Fix 4: type check for parsed JSON
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        stdin_data = parsed
+                    # else: non-dict JSON ([], null, string) — treat as empty
+                    tp = stdin_data.get("transcript_path")
+                    if isinstance(tp, str) and tp:
+                        # Fix 11: security check for stdin transcript_path
+                        projects_dir = get_projects_dir().resolve()
+                        resolved = Path(tp).resolve()
+                        try:
+                            resolved.relative_to(projects_dir)
+                        except ValueError:
+                            _warn(f"transcript_path outside projects dir: {tp}")
+                            _mine_empty_hook_output()
+                            return
+                        transcript_path = resolved
+                    hook_event_name = stdin_data.get("hook_event_name")
+                    if hook_event_name:
+                        is_hook_mode = True
+            except (json.JSONDecodeError, ValueError):
+                # Fix 9: malformed stdin — warn and return empty context
+                _warn("malformed stdin JSON, returning empty context")
+                _mine_empty_hook_output()
+                return
+
+    # Fix 10: hook mode — no global fallback
+    if transcript_path is None:
+        if is_hook_mode:
+            # Hook invocation without transcript — return empty context
+            _mine_empty_hook_output()
+            return
+        else:
+            # Manual CLI — fallback is OK
+            transcript_path = _mine_find_fallback_session(args, stdin_data)
+
+    extracted = _mine_extract_context(transcript_path)
+
+    if getattr(args, "dry_run", False):
+        _mine_print_dry_run(extracted, transcript_path)
+        return
+
+    if getattr(args, "json", False):
+        print(json.dumps(extracted, ensure_ascii=False, indent=2))
+        return
+
+    context_text = _mine_format_context(extracted)
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreCompact",
+            "additionalContext": context_text,
+        }
+    }
+    print(json.dumps(output, ensure_ascii=False))
+
+
 # ── CLI ──────────────────────────────────────────────────────────
 
 
@@ -1295,6 +1604,22 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("--month", action="store_true", help="This month")
     co.add_argument("--json", action="store_true", help="JSON output")
 
+    # mine
+    mi = sub.add_parser(
+        "mine", help="Extract key context from session (PreCompact hook)"
+    )
+    mi.add_argument("--transcript", help="Path to transcript file (overrides stdin)")
+    mi.add_argument("-p", "--project", help="Project name (for fallback)")
+    mi.add_argument(
+        "--json", action="store_true", help="JSON output (raw extracted data)"
+    )
+    mi.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="Show what would be extracted without hook output",
+    )
+
     return p
 
 
@@ -1327,6 +1652,8 @@ def main():
         cmd_tools(args)
     elif cmd == "cost":
         cmd_cost(args)
+    elif cmd == "mine":
+        cmd_mine(args)
     else:
         parser.print_help()
 
